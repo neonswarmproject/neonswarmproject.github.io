@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0a0a1a" />
+<meta name="description" content="NEON SWARM — a synthwave bullet-heaven survival game. Survive the endless swarm, level up, and become unstoppable. Built with pure HTML5 Canvas + Web Audio." />
+<title>NEON SWARM — a synthwave survival game</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="stage">
+    <canvas id="game"></canvas>
+
+    <!-- Top corner controls (inline SVG so they render on every platform) -->
+    <div id="topbar">
+      <button class="iconbtn" id="btnMute"  title="Mute / unmute (M)" aria-label="Mute">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 8.5a4 4 0 0 1 0 7"/><path d="M18.5 6a8 8 0 0 1 0 12"/></svg>
+      </button>
+      <button class="iconbtn" id="btnFull"  title="Fullscreen (F)" aria-label="Fullscreen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+      </button>
+      <button class="iconbtn" id="btnPause" title="Pause (Esc / P)" aria-label="Pause">
+        <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+      </button>
+    </div>
+
+    <!-- TITLE SCREEN -->
+    <div class="overlay show" id="title">
+      <div class="panel title-panel">
+        <h1 class="logo">NEON<span>SWARM</span></h1>
+        <p class="tagline">Survive the endless swarm. Evolve. Become the storm.</p>
+        <button class="bigbtn" id="btnPlay">▶ PLAY</button>
+        <div class="hi" id="titleHi"></div>
+        <div class="controls-help">
+          <div class="ch-row"><b>Move</b><span>WASD / Arrows / Drag</span></div>
+          <div class="ch-row"><b>Dash</b><span>Space / Shift / Double-tap</span></div>
+          <div class="ch-row"><b>Aim &amp; fire</b><span>Automatic — focus on dodging</span></div>
+          <div class="ch-row"><b>Pause</b><span>Esc / P</span></div>
+        </div>
+        <p class="madewith">Pure HTML5 Canvas + Web Audio · no images, no libraries, all code.</p>
+      </div>
+    </div>
+
+    <!-- LEVEL UP -->
+    <div class="overlay" id="levelup">
+      <div class="panel levelup-panel">
+        <h2 class="lvl-title">LEVEL <span id="lvlNum">2</span></h2>
+        <p class="lvl-sub">Choose an upgrade</p>
+        <div class="cards" id="cards"></div>
+        <button class="rerollbtn" id="btnReroll">↻ Reroll &nbsp;(<span id="rerollCount">0</span> left)</button>
+      </div>
+    </div>
+
+    <!-- PAUSE -->
+    <div class="overlay" id="pause">
+      <div class="panel">
+        <h2 class="lvl-title">PAUSED</h2>
+        <div class="stat-grid" id="pauseStats"></div>
+        <div class="btnrow">
+          <button class="bigbtn" id="btnResume">▶ Resume</button>
+          <button class="bigbtn ghost" id="btnQuit">Main Menu</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- GAME OVER -->
+    <div class="overlay" id="gameover">
+      <div class="panel">
+        <h2 class="lvl-title go-title">YOU FELL</h2>
+        <div class="stat-grid" id="overStats"></div>
+        <div class="newbest" id="newBest">★ NEW BEST ★</div>
+        <button class="bigbtn" id="btnAgain">▶ Run it back</button>
+      </div>
+    </div>
+
+    <!-- Loading hint until JS boots -->
+    <div id="boot">loading…</div>
+  </div>
+
+  <script src="js/audio.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
