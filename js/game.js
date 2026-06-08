@@ -24,6 +24,10 @@
 (function () {
 'use strict';
 
+// Single source of truth for the build version (shown discreetly on the title
+// screen). Bump the minor by 0.1 for each completed prompt.
+const VERSION = '1.1';
+
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
    ========================================================================= */
@@ -376,11 +380,12 @@ function firePlayerProjectile(o) {
 const WEAPONS = {
   /* ---- Pulse Cannon : auto-targeting bolts ---- */
   pulse: {
-    name: 'Pulse Cannon', icon: '✦', color: CY, max: 8,
+    name: 'Pulse Cannon', icon: '✦', color: CY, max: 12,
     info(l) {
       const m = ['Auto-fires a bolt at the nearest foe.',
         '+1 bolt per volley.', '+45% damage.', 'Faster fire rate.',
-        '+1 bolt &amp; pierces 1 enemy.', '+45% damage.', '+1 bolt.', 'Pierces +2, big damage.'];
+        '+1 bolt &amp; pierces 1 enemy.', '+45% damage.', '+1 bolt.', 'Pierces +2, big damage.',
+        '+1 bolt &amp; pierce +1.', '+50% damage.', '+1 bolt.', 'Overload: max bolts, +damage &amp; pierce.'];
       return m[Math.min(l, m.length - 1)];
     },
     update(self, dt) {
@@ -389,9 +394,9 @@ const WEAPONS = {
       const cd = 0.6 / S().attackSpeedMul;
       if (self.t > 0) return;
       self.t = cd;
-      const count = 1 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 1 : 0) + (lv >= 7 ? 1 : 0);
-      let dmg = 11 * (1 + (lv >= 3 ? 0.45 : 0) + (lv >= 6 ? 0.45 : 0) + (lv >= 8 ? 0.6 : 0)) * S().damageMul;
-      const pierce = (lv >= 5 ? 1 : 0) + (lv >= 8 ? 2 : 0);
+      const count = 1 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 1 : 0) + (lv >= 7 ? 1 : 0) + (lv >= 9 ? 1 : 0) + (lv >= 11 ? 1 : 0);
+      let dmg = 11 * (1 + (lv >= 3 ? 0.45 : 0) + (lv >= 6 ? 0.45 : 0) + (lv >= 8 ? 0.6 : 0) + (lv >= 10 ? 0.5 : 0) + (lv >= 12 ? 0.7 : 0)) * S().damageMul;
+      const pierce = (lv >= 5 ? 1 : 0) + (lv >= 8 ? 2 : 0) + (lv >= 9 ? 1 : 0) + (lv >= 12 ? 2 : 0);
       const targets = nearestEnemies(player.x, player.y, count);
       if (!targets.length) return;
       const spd = 560 * S().projSpeedMul;
@@ -410,20 +415,21 @@ const WEAPONS = {
 
   /* ---- Halo Blades : orbiting blades ---- */
   orbit: {
-    name: 'Halo Blades', icon: '🌀', color: PU, max: 7,
+    name: 'Halo Blades', icon: '🌀', color: PU, max: 11,
     info(l) {
       const m = ['Blades orbit you, shredding contact.',
         '+1 blade.', '+40% damage.', '+1 blade &amp; wider orbit.',
-        'Faster spin, +damage.', '+1 blade.', 'Huge orbit &amp; damage.'];
+        'Faster spin, +damage.', '+1 blade.', 'Huge orbit &amp; damage.',
+        '+1 blade.', 'Wider orbit &amp; +damage.', '+1 blade &amp; faster spin.', 'Maelstrom: vast orbit &amp; damage.'];
       return m[Math.min(l, m.length - 1)];
     },
     update(self, dt) {
       const lv = self.level;
       if (!self.data) self.data = { ang: 0, hits: new Map() };
-      const count = 2 + (lv >= 2 ? 1 : 0) + (lv >= 4 ? 1 : 0) + (lv >= 6 ? 1 : 0);
-      const radius = (78 + (lv >= 4 ? 26 : 0) + (lv >= 7 ? 40 : 0)) * Math.sqrt(S().areaMul);
-      const spin = (2.0 + (lv >= 5 ? 1.1 : 0)) * S().attackSpeedMul;
-      const dmg = 9 * (1 + (lv >= 3 ? 0.4 : 0) + (lv >= 5 ? 0.4 : 0) + (lv >= 7 ? 0.7 : 0)) * S().damageMul * dt * 6;
+      const count = 2 + (lv >= 2 ? 1 : 0) + (lv >= 4 ? 1 : 0) + (lv >= 6 ? 1 : 0) + (lv >= 8 ? 1 : 0) + (lv >= 10 ? 1 : 0);
+      const radius = (78 + (lv >= 4 ? 26 : 0) + (lv >= 7 ? 40 : 0) + (lv >= 9 ? 30 : 0) + (lv >= 11 ? 36 : 0)) * Math.sqrt(S().areaMul);
+      const spin = (2.0 + (lv >= 5 ? 1.1 : 0) + (lv >= 10 ? 0.8 : 0)) * S().attackSpeedMul;
+      const dmg = 9 * (1 + (lv >= 3 ? 0.4 : 0) + (lv >= 5 ? 0.4 : 0) + (lv >= 7 ? 0.7 : 0) + (lv >= 9 ? 0.5 : 0) + (lv >= 11 ? 0.7 : 0)) * S().damageMul * dt * 6;
       self.data.ang += spin * dt;
       const br = 13;
       self.data.positions = [];
@@ -454,26 +460,27 @@ const WEAPONS = {
 
   /* ---- Shock Pulse : periodic nova ---- */
   nova: {
-    name: 'Shock Pulse', icon: '💥', color: YE, max: 7,
+    name: 'Shock Pulse', icon: '💥', color: YE, max: 11,
     info(l) {
       const m = ['Emits a damaging shockwave around you.',
         'Bigger radius.', '+45% damage.', 'Faster pulses.',
-        'Bigger radius &amp; knockback.', '+45% damage.', 'Massive blast.'];
+        'Bigger radius &amp; knockback.', '+45% damage.', 'Massive blast.',
+        'Bigger radius.', 'Faster pulses.', '+50% damage.', 'Cataclysm: enormous blast &amp; knockback.'];
       return m[Math.min(l, m.length - 1)];
     },
     update(self, dt) {
       const lv = self.level;
       self.t = (self.t || 0) - dt;
-      const cd = (2.4 - (lv >= 4 ? 0.6 : 0)) / S().attackSpeedMul;
+      const cd = (2.4 - (lv >= 4 ? 0.6 : 0) - (lv >= 9 ? 0.4 : 0)) / S().attackSpeedMul;
       if (self.t > 0) return;
       self.t = cd;
-      const radius = (120 + (lv >= 2 ? 40 : 0) + (lv >= 5 ? 60 : 0) + (lv >= 7 ? 90 : 0)) * S().areaMul;
-      const dmg = 16 * (1 + (lv >= 3 ? 0.45 : 0) + (lv >= 6 ? 0.45 : 0) + (lv >= 7 ? 0.6 : 0)) * S().damageMul;
+      const radius = (120 + (lv >= 2 ? 40 : 0) + (lv >= 5 ? 60 : 0) + (lv >= 7 ? 90 : 0) + (lv >= 8 ? 50 : 0) + (lv >= 11 ? 80 : 0)) * S().areaMul;
+      const dmg = 16 * (1 + (lv >= 3 ? 0.45 : 0) + (lv >= 6 ? 0.45 : 0) + (lv >= 7 ? 0.6 : 0) + (lv >= 10 ? 0.5 : 0)) * S().damageMul;
       grid.query(player.x, player.y, radius, _q);
       for (let i = 0; i < _q.length; i++) {
         const e = _q[i]; if (e.dead) continue;
         if (dist2(player.x, player.y, e.x, e.y) < (radius + e.r) ** 2)
-          damageEnemy(e, dmg, { kbx: e.x - player.x, kby: e.y - player.y, kb: 140 + (lv >= 5 ? 120 : 0), color: YE });
+          damageEnemy(e, dmg, { kbx: e.x - player.x, kby: e.y - player.y, kb: 140 + (lv >= 5 ? 120 : 0) + (lv >= 11 ? 120 : 0), color: YE });
       }
       G.particles.push({ x: player.x, y: player.y, vx: 0, vy: 0, r: 10, mr: radius, life: 0.45, max: 0.45, color: YE, kind: 'ring' });
       G.shake = Math.min(1, G.shake + 0.18);
@@ -483,23 +490,24 @@ const WEAPONS = {
 
   /* ---- Arc Lightning : chaining bolts ---- */
   chain: {
-    name: 'Arc Lightning', icon: '⚡', color: BL, max: 7,
+    name: 'Arc Lightning', icon: '⚡', color: BL, max: 11,
     info(l) {
       const m = ['Lightning leaps between nearby foes.',
         '+1 chain jump.', '+40% damage.', 'Faster strikes.',
-        '+2 chain jumps.', '+40% damage.', 'Storm: +damage &amp; jumps.'];
+        '+2 chain jumps.', '+40% damage.', 'Storm: +damage &amp; jumps.',
+        '+2 chain jumps.', 'Faster strikes.', '+50% damage.', 'Tempest: +jumps &amp; damage.'];
       return m[Math.min(l, m.length - 1)];
     },
     update(self, dt) {
       const lv = self.level;
       self.t = (self.t || 0) - dt;
-      const cd = (1.4 - (lv >= 4 ? 0.45 : 0)) / S().attackSpeedMul;
+      const cd = (1.4 - (lv >= 4 ? 0.45 : 0) - (lv >= 9 ? 0.3 : 0)) / S().attackSpeedMul;
       if (self.t > 0) return;
       const first = nearestEnemy(player.x, player.y, 460);
       if (!first) { self.t = 0.2; return; }
       self.t = cd;
-      const jumps = 3 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 2 : 0) + (lv >= 7 ? 2 : 0);
-      let dmg = 13 * (1 + (lv >= 3 ? 0.4 : 0) + (lv >= 6 ? 0.4 : 0) + (lv >= 7 ? 0.6 : 0)) * S().damageMul;
+      const jumps = 3 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 2 : 0) + (lv >= 7 ? 2 : 0) + (lv >= 9 ? 2 : 0) + (lv >= 11 ? 2 : 0);
+      let dmg = 13 * (1 + (lv >= 3 ? 0.4 : 0) + (lv >= 6 ? 0.4 : 0) + (lv >= 7 ? 0.6 : 0) + (lv >= 10 ? 0.5 : 0)) * S().damageMul;
       const hitSet = new Set();
       let from = { x: player.x, y: player.y };
       let cur = first;
@@ -527,22 +535,23 @@ const WEAPONS = {
 
   /* ---- Seeker Swarm : homing missiles ---- */
   missile: {
-    name: 'Seeker Swarm', icon: '🚀', color: OR, max: 7,
+    name: 'Seeker Swarm', icon: '🚀', color: OR, max: 11,
     info(l) {
       const m = ['Launches homing missiles that explode.',
         '+1 missile.', '+40% damage.', 'Faster launches.',
-        '+1 missile &amp; bigger blast.', '+40% damage.', '+2 missiles.'];
+        '+1 missile &amp; bigger blast.', '+40% damage.', '+2 missiles.',
+        'Bigger blast.', '+1 missile &amp; faster.', '+50% damage.', 'Swarm: +2 missiles &amp; huge blast.'];
       return m[Math.min(l, m.length - 1)];
     },
     update(self, dt) {
       const lv = self.level;
       self.t = (self.t || 0) - dt;
-      const cd = (1.5 - (lv >= 4 ? 0.4 : 0)) / S().attackSpeedMul;
+      const cd = (1.5 - (lv >= 4 ? 0.4 : 0) - (lv >= 9 ? 0.3 : 0)) / S().attackSpeedMul;
       if (self.t > 0) return;
       self.t = cd;
-      const count = 1 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 1 : 0) + (lv >= 7 ? 2 : 0);
-      const dmg = 18 * (1 + (lv >= 3 ? 0.4 : 0) + (lv >= 6 ? 0.4 : 0)) * S().damageMul;
-      const blast = (52 + (lv >= 5 ? 26 : 0)) * S().areaMul;
+      const count = 1 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 1 : 0) + (lv >= 7 ? 2 : 0) + (lv >= 9 ? 1 : 0) + (lv >= 11 ? 2 : 0);
+      const dmg = 18 * (1 + (lv >= 3 ? 0.4 : 0) + (lv >= 6 ? 0.4 : 0) + (lv >= 10 ? 0.5 : 0)) * S().damageMul;
+      const blast = (52 + (lv >= 5 ? 26 : 0) + (lv >= 8 ? 24 : 0) + (lv >= 11 ? 30 : 0)) * S().areaMul;
       for (let i = 0; i < count; i++) {
         const a = rand(0, TAU);
         firePlayerProjectile({
@@ -557,25 +566,26 @@ const WEAPONS = {
 
   /* ---- Lance : piercing beam ---- */
   beam: {
-    name: 'Photon Lance', icon: '🔆', color: PK, max: 7,
+    name: 'Photon Lance', icon: '🔆', color: PK, max: 11,
     info(l) {
       const m = ['Fires a piercing beam of light.',
         'Wider beam.', '+45% damage.', 'Faster firing.',
-        '+1 beam &amp; longer.', '+45% damage.', 'Twin overcharged lances.'];
+        '+1 beam &amp; longer.', '+45% damage.', 'Twin overcharged lances.',
+        'Longer beam.', '+1 lance &amp; faster.', 'Wider beam.', 'Prismatic: +lance &amp; damage.'];
       return m[Math.min(l, m.length - 1)];
     },
     update(self, dt) {
       const lv = self.level;
       self.t = (self.t || 0) - dt;
-      const cd = (1.05 - (lv >= 4 ? 0.3 : 0)) / S().attackSpeedMul;
+      const cd = (1.05 - (lv >= 4 ? 0.3 : 0) - (lv >= 9 ? 0.22 : 0)) / S().attackSpeedMul;
       if (self.t > 0) return;
-      const beams = 1 + (lv >= 5 ? 1 : 0) + (lv >= 7 ? 1 : 0);
+      const beams = 1 + (lv >= 5 ? 1 : 0) + (lv >= 7 ? 1 : 0) + (lv >= 9 ? 1 : 0) + (lv >= 11 ? 1 : 0);
       const target = nearestEnemy(player.x, player.y, 1200);
       if (!target) { self.t = 0.2; return; }
       self.t = cd;
-      const len = (520 + (lv >= 5 ? 180 : 0)) * S().areaMul;
-      const wid = (16 + (lv >= 2 ? 8 : 0)) * Math.sqrt(S().areaMul);
-      const dmg = 26 * (1 + (lv >= 3 ? 0.45 : 0) + (lv >= 6 ? 0.45 : 0) + (lv >= 7 ? 0.6 : 0)) * S().damageMul;
+      const len = (520 + (lv >= 5 ? 180 : 0) + (lv >= 8 ? 160 : 0)) * S().areaMul;
+      const wid = (16 + (lv >= 2 ? 8 : 0) + (lv >= 10 ? 8 : 0)) * Math.sqrt(S().areaMul);
+      const dmg = 26 * (1 + (lv >= 3 ? 0.45 : 0) + (lv >= 6 ? 0.45 : 0) + (lv >= 7 ? 0.6 : 0) + (lv >= 11 ? 0.6 : 0)) * S().damageMul;
       const baseA = angTo(player.x, player.y, target.x, target.y);
       for (let b = 0; b < beams; b++) {
         const a = baseA + (b - (beams - 1) / 2) * 0.14;
@@ -596,18 +606,19 @@ const WEAPONS = {
 
   /* ---- Cryo Field : slowing aura ---- */
   frost: {
-    name: 'Cryo Field', icon: '❄', color: '#7fe9ff', max: 6,
+    name: 'Cryo Field', icon: '❄', color: '#7fe9ff', max: 10,
     info(l) {
       const m = ['Aura slows &amp; chills nearby foes.',
         'Wider field.', 'Stronger slow &amp; damage.',
-        'Wider field.', 'Deep freeze damage.', 'Glacial: huge slow field.'];
+        'Wider field.', 'Deep freeze damage.', 'Glacial: huge slow field.',
+        'Stronger chill &amp; damage.', 'Wider field.', 'Deeper slow.', 'Absolute zero: massive field.'];
       return m[Math.min(l, m.length - 1)];
     },
     update(self, dt) {
       const lv = self.level;
-      const radius = (110 + (lv >= 2 ? 35 : 0) + (lv >= 4 ? 45 : 0) + (lv >= 6 ? 70 : 0)) * S().areaMul;
-      const slow = 0.42 + (lv >= 3 ? 0.12 : 0) + (lv >= 6 ? 0.12 : 0);
-      const dps = (5 + (lv >= 3 ? 4 : 0) + (lv >= 5 ? 6 : 0)) * S().damageMul;
+      const radius = (110 + (lv >= 2 ? 35 : 0) + (lv >= 4 ? 45 : 0) + (lv >= 6 ? 70 : 0) + (lv >= 8 ? 45 : 0) + (lv >= 10 ? 60 : 0)) * S().areaMul;
+      const slow = 0.42 + (lv >= 3 ? 0.12 : 0) + (lv >= 6 ? 0.12 : 0) + (lv >= 9 ? 0.08 : 0);
+      const dps = (5 + (lv >= 3 ? 4 : 0) + (lv >= 5 ? 6 : 0) + (lv >= 7 ? 6 : 0) + (lv >= 10 ? 8 : 0)) * S().damageMul;
       G.frost = { radius, slow, dmg: dps };
       // damage tick handled here
       self.t = (self.t || 0) - dt;
@@ -640,18 +651,18 @@ function hasWeapon(id) { return player.weapons.some(w => w.id === id); }
    8. PASSIVES
    ========================================================================= */
 const PASSIVES = {
-  vigor:    { name: 'Vigor',     icon: '❤', color: RD, max: 6, desc: '+25 Max HP (and heal).',    apply() { S().maxHpBonus += 25; player.maxHp = 100 + S().maxHpBonus; player.hp += 25; } },
-  swift:    { name: 'Swift',     icon: '🪽', color: CY, max: 6, desc: '+9% Move speed.',           apply() { S().moveSpeedMul *= 1.09; } },
-  power:    { name: 'Overcharge',icon: '🔺', color: MA, max: 8, desc: '+13% Damage.',              apply() { S().damageMul *= 1.13; } },
-  haste:    { name: 'Haste',     icon: '⏱', color: YE, max: 7, desc: '+11% Attack speed.',        apply() { S().attackSpeedMul *= 1.11; } },
-  expanse:  { name: 'Expanse',   icon: '🔮', color: PU, max: 6, desc: '+13% Area of effect.',      apply() { S().areaMul *= 1.13; } },
-  velocity: { name: 'Velocity',  icon: '➹', color: GR, max: 5, desc: '+16% Projectile speed.',    apply() { S().projSpeedMul *= 1.16; S().projDurMul *= 1.08; } },
-  magnet:   { name: 'Magnet',    icon: '🧲', color: BL, max: 5, desc: '+38% Pickup range.',        apply() { S().pickup *= 1.38; } },
-  greed:    { name: 'Greed',     icon: '💎', color: GR, max: 6, desc: '+16% XP gain.',             apply() { S().xpGain *= 1.16; } },
-  regen:    { name: 'Regen',     icon: '✚', color: GR, max: 6, desc: '+0.7 HP / sec.',            apply() { S().regen += 0.7; } },
-  armor:    { name: 'Plating',   icon: '🛡', color: BL, max: 6, desc: '+2 Armor (flat soak).',     apply() { S().armor += 2; } },
-  focus:    { name: 'Focus',     icon: '🎯', color: OR, max: 6, desc: '+8% Crit, +0.3 crit mult.', apply() { S().crit += 0.08; S().critMult += 0.3; } },
-  luck:     { name: 'Fortune',   icon: '🍀', color: YE, max: 5, desc: 'Better drops &amp; rerolls.',  apply() { S().luck += 1; G.rerolls += 1; } },
+  vigor:    { name: 'Vigor',     icon: '❤', color: RD, max: 9, desc: '+25 Max HP (and heal).',    apply() { S().maxHpBonus += 25; player.maxHp = 100 + S().maxHpBonus; player.hp += 25; } },
+  swift:    { name: 'Swift',     icon: '🪽', color: CY, max: 9, desc: '+9% Move speed.',           apply() { S().moveSpeedMul *= 1.09; } },
+  power:    { name: 'Overcharge',icon: '🔺', color: MA, max: 11, desc: '+13% Damage.',              apply() { S().damageMul *= 1.13; } },
+  haste:    { name: 'Haste',     icon: '⏱', color: YE, max: 10, desc: '+11% Attack speed.',        apply() { S().attackSpeedMul *= 1.11; } },
+  expanse:  { name: 'Expanse',   icon: '🔮', color: PU, max: 9, desc: '+13% Area of effect.',      apply() { S().areaMul *= 1.13; } },
+  velocity: { name: 'Velocity',  icon: '➹', color: GR, max: 8, desc: '+16% Projectile speed.',    apply() { S().projSpeedMul *= 1.16; S().projDurMul *= 1.08; } },
+  magnet:   { name: 'Magnet',    icon: '🧲', color: BL, max: 8, desc: '+38% Pickup range.',        apply() { S().pickup *= 1.38; } },
+  greed:    { name: 'Greed',     icon: '💎', color: GR, max: 9, desc: '+16% XP gain.',             apply() { S().xpGain *= 1.16; } },
+  regen:    { name: 'Regen',     icon: '✚', color: GR, max: 9, desc: '+0.7 HP / sec.',            apply() { S().regen += 0.7; } },
+  armor:    { name: 'Plating',   icon: '🛡', color: BL, max: 9, desc: '+2 Armor (flat soak).',     apply() { S().armor += 2; } },
+  focus:    { name: 'Focus',     icon: '🎯', color: OR, max: 9, desc: '+8% Crit, +0.3 crit mult.', apply() { S().crit += 0.08; S().critMult += 0.3; } },
+  luck:     { name: 'Fortune',   icon: '🍀', color: YE, max: 7, desc: 'Extra rerolls &amp; better upgrade choices.', apply() { S().luck += 1; G.rerolls += 1; } },
 };
 const PASSIVE_IDS = Object.keys(PASSIVES);
 
@@ -675,7 +686,7 @@ function buildChoices() {
   // new weapons
   if (player.weapons.length < MAX_WEAPONS) {
     for (const id of WEAPON_IDS) if (!hasWeapon(id))
-      pool.push({ kind: 'weapon-new', id, weight: 9 + S().luck });
+      pool.push({ kind: 'weapon-new', id, weight: 9 + S().luck * 0.5 });
   }
   // passives
   for (const id of PASSIVE_IDS) {
@@ -786,12 +797,18 @@ const ETYPES = {
   mini:     { hp: 8,  speed: 96,  r: 9,  dmg: 6,  xp: 1, color: GR, shape: 'square' },
 };
 
+// Late-game difficulty curve. HP ramps hard past ~4 min (cubic term); speed is
+// capped; damage is linear. NOTE: these constants will be retuned once
+// meta-progression exists.
+const DIFF_HP_LIN = 0.7, DIFF_HP_SQ = 0.07, DIFF_HP_CUBE = 0.004;
+const DIFF_SPEED_LIN = 0.05, DIFF_SPEED_MAX = 1.95;
+const DIFF_DMG_LIN = 0.28;
 function diffScale() {
   const m = G.time / 60;
   return {
-    hp: 1 + m * 0.6 + m * m * 0.045,
-    speed: Math.min(1.7, 1 + m * 0.045),
-    dmg: 1 + m * 0.22,
+    hp: 1 + m * DIFF_HP_LIN + m * m * DIFF_HP_SQ + m * m * m * DIFF_HP_CUBE,
+    speed: Math.min(DIFF_SPEED_MAX, 1 + m * DIFF_SPEED_LIN),
+    dmg: 1 + m * DIFF_DMG_LIN,
   };
 }
 
@@ -839,18 +856,26 @@ function pickEnemyType(m) {
   return 'grunt';
 }
 
+// Spawn director tuning. Late-game pressure: lower interval floor + faster batch
+// growth. Elites use a flat (no-luck) chance with a gentle time ramp.
+// NOTE: these constants will be retuned once meta-progression exists.
+const SPAWN_INTERVAL_MIN = 0.14;
+const SPAWN_BATCH_RATE   = 1.0;
+const ELITE_BASE_CHANCE  = 0.02;
+const ELITE_TIME_SCALE   = 0.004;
+const ELITE_CHANCE_MAX   = 0.07;
 function director(dt) {
   const m = G.time / 60;
   // spawn cadence
   G.spawnTimer -= dt;
-  const interval = clamp(1.05 - m * 0.08, 0.16, 1.05);
+  const interval = clamp(1.05 - m * 0.08, SPAWN_INTERVAL_MIN, 1.05);
   if (G.spawnTimer <= 0) {
     G.spawnTimer = interval;
-    const batch = 1 + Math.floor(m * 0.8) + (Math.random() < 0.2 ? 2 : 0);
+    const batch = 1 + Math.floor(m * SPAWN_BATCH_RATE) + (Math.random() < 0.2 ? 2 : 0);
     for (let i = 0; i < batch; i++) {
       const p = spawnRingPosition();
       const t = pickEnemyType(m);
-      const elite = m > 1.5 && Math.random() < 0.02 + S().luck * 0.005;
+      const elite = m > 1.5 && Math.random() < Math.min(ELITE_CHANCE_MAX, ELITE_BASE_CHANCE + m * ELITE_TIME_SCALE);
       spawnEnemy(t, p.x, p.y, elite ? { elite: true } : null);
     }
     // occasional pack burst
@@ -1035,6 +1060,11 @@ function damageEnemy(e, dmg, opts) {
   if (e.hp <= 0) killEnemy(e, true);
 }
 
+// Normal-enemy utility drop chances (cumulative roll thresholds; intentionally
+// rare so pickups feel earned). NOTE: retune once meta-progression exists.
+const DROP_HEAL_CHANCE   = 0.004;
+const DROP_MAGNET_CHANCE = 0.007;
+const DROP_BOMB_CHANCE   = 0.009;
 function killEnemy(e, reward) {
   if (e.dead) return;
   e.dead = true;
@@ -1057,10 +1087,9 @@ function killEnemy(e, reward) {
     else if (e.elite) spawnPickup(e.x, e.y, pick(['heal', 'magnet', 'bomb']));
     else {
       const roll = Math.random();
-      const luck = S().luck * 0.004;
-      if (roll < 0.008 + luck) spawnPickup(e.x, e.y, 'heal');
-      else if (roll < 0.014 + luck) spawnPickup(e.x, e.y, 'magnet');
-      else if (roll < 0.018 + luck) spawnPickup(e.x, e.y, 'bomb');
+      if (roll < DROP_HEAL_CHANCE) spawnPickup(e.x, e.y, 'heal');
+      else if (roll < DROP_MAGNET_CHANCE) spawnPickup(e.x, e.y, 'magnet');
+      else if (roll < DROP_BOMB_CHANCE) spawnPickup(e.x, e.y, 'bomb');
     }
 
     // splitter children
@@ -1118,12 +1147,18 @@ function applyPickup(type) {
     floater(player.x, player.y - 24, '+HP', GR, 18); sfx('coin');
     for (let i = 0; i < 16; i++) spawnParticle(player.x, player.y, rand(-120, 120), rand(-120, 120), 0.5, 3, GR, 'spark');
   } else if (type === 'magnet') {
-    for (const g of G.gems) g.mag = true;
+    // Only magnetize gems that are currently on-screen. The world renders 1:1
+    // centered on the camera, and Math.hypot(W,H)/2 is exactly the off-screen
+    // spawn ring, so it equals the visible edge. Off-screen gems are left alone.
+    const onScreen = Math.hypot(W, H) / 2;
+    for (const g of G.gems) if (dist(g.x, g.y, player.x, player.y) <= onScreen) g.mag = true;
     floater(player.x, player.y - 24, 'MAGNET', BL, 18); sfx('coin');
   } else if (type === 'bomb') {
     sfx('bigExplode'); G.shake = 1; G.flash = 0.6; G.flashColor = OR; G.hitstop = 0.08;
     G.particles.push({ x: player.x, y: player.y, vx: 0, vy: 0, r: 12, mr: 900, life: 0.6, max: 0.6, color: OR, kind: 'ring' });
-    for (const e of G.enemies.slice()) if (!e.boss) damageEnemy(e, 9999, { color: OR }); else damageEnemy(e, 400, { color: OR });
+    // Clears the field but never touches bosses; killed enemies yield nothing
+    // (no gems, no pickups, no splitter children) via killEnemy(e, false).
+    for (const e of G.enemies.slice()) { if (e.boss) continue; killEnemy(e, false); }
     G.eProj.length = 0;
     floater(player.x, player.y - 24, 'BOOM', OR, 22);
   }
@@ -1757,6 +1792,8 @@ function frame(now) {
 
 // boot
 boot.style.display = 'none';
+const verEl = document.getElementById('verTag');
+if (verEl) verEl.textContent = 'v' + VERSION;
 showTitle();
 requestAnimationFrame(frame);
 
