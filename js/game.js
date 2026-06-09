@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen). Bump the minor by 0.1 for each completed prompt.
-const VERSION = '1.4';
+const VERSION = '1.5';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -152,6 +152,7 @@ const _wq = [], _wq2 = []; // dedicated buffers for the new weapons (never clobb
    ========================================================================= */
 const MAX_ENEMIES = 380;
 const MAX_PARTICLES = 1400;
+const MAX_EPROJ = 1200;      // enemy-bullet cap; drop oldest so bullet-hell phases stay smooth on mobile
 
 const G = {
   state: 'title',                 // title | playing | levelup | paused | gameover
@@ -169,7 +170,11 @@ const G = {
   rerolls: 1,
   spawnTimer: 0,
   nextBossAt: 75,
-  bossNum: 0,
+  bossNum: 0,                      // running total of bosses spawned
+  bossIndex: 0,                    // position in BOSS_ORDER (0 = intro overlord)
+  bossTier: 0,                     // New Game+ tier; bosses return stronger when the order wraps
+  inputHiccup: 0,                  // brief (<=0.5s) movement-input loss from GLITCH boss
+  glitchFX: 0,                     // screen-space glitch overlay intensity 0..1
   boss: null,
   frost: null,                    // {radius, slow, dmg} computed each frame
   playerSlow: 1,                  // 0..1 move multiplier from disruptor fields (reset each frame)
@@ -301,6 +306,7 @@ const player = {
   weapons: [],
   passives: {},                   // id -> level
   stats: null,
+  buffT: { triple: 0, nectar: 0, aura: 0, auraTick: 0 },  // timed boss buffs (seconds left)
 };
 function freshStats() {
   return {
@@ -372,11 +378,24 @@ function nearestEnemies(x, y, n) {
   return out;
 }
 
+const TRIPLE_SPREAD = 0.15;   // rad each side for the Prism Shard buff
 function firePlayerProjectile(o) {
-  G.pProj.push(Object.assign({
+  const base = Object.assign({
     x: 0, y: 0, vx: 0, vy: 0, r: 6, dmg: 10, pierce: 0, life: 1.2,
     color: CY, hit: null, homing: 0, target: null, kind: 'bolt', trail: 0
-  }, o));
+  }, o);
+  G.pProj.push(base);
+  // Prism Shard: every fired projectile becomes a triple (aura/orbit/beam weapons
+  // don't call this, so they're unaffected — that's intended).
+  if (player.buffT.triple > 0 && (base.vx || base.vy)) {
+    const sp = Math.hypot(base.vx, base.vy), a0 = Math.atan2(base.vy, base.vx);
+    for (const s of [-TRIPLE_SPREAD, TRIPLE_SPREAD]) {
+      const a = a0 + s;
+      const clone = Object.assign({}, base, { vx: Math.cos(a) * sp, vy: Math.sin(a) * sp });
+      if (base.hit) clone.hit = new Set();   // independent hit-set so clones can also hit
+      G.pProj.push(clone);
+    }
+  }
 }
 
 const WEAPONS = {
@@ -1286,50 +1305,355 @@ const ELITE_TIME_SCALE   = 0.004;
 const ELITE_CHANCE_MAX   = 0.07;
 function director(dt) {
   const m = G.time / 60;
-  // spawn cadence
-  G.spawnTimer -= dt;
-  const interval = clamp(1.05 - m * 0.08, SPAWN_INTERVAL_MIN, 1.05);
-  if (G.spawnTimer <= 0) {
-    G.spawnTimer = interval;
-    const batch = 1 + Math.floor(m * SPAWN_BATCH_RATE) + (Math.random() < 0.2 ? 2 : 0);
-    for (let i = 0; i < batch; i++) {
-      const p = spawnRingPosition();
-      const t = pickEnemyType(m);
-      const elite = m > 1.5 && Math.random() < Math.min(ELITE_CHANCE_MAX, ELITE_BASE_CHANCE + m * ELITE_TIME_SCALE);
-      spawnEnemy(t, p.x, p.y, elite ? { elite: true } : null);
-    }
-    // occasional pack burst
-    if (m > 1 && Math.random() < 0.12) {
-      const p = spawnRingPosition();
-      const t = pickEnemyType(m);
-      for (let i = 0; i < 6 + (m | 0); i++)
-        spawnEnemy(t, p.x + rand(-60, 60), p.y + rand(-60, 60), null);
+  // Normal waves — skipped entirely while a suppress-spawns boss is alive (it
+  // controls the arena; it may still summon its own minions via spawnEnemy).
+  if (!(G.boss && G.boss.suppressSpawns)) {
+    G.spawnTimer -= dt;
+    const interval = clamp(1.05 - m * 0.08, SPAWN_INTERVAL_MIN, 1.05);
+    if (G.spawnTimer <= 0) {
+      G.spawnTimer = interval;
+      const batch = 1 + Math.floor(m * SPAWN_BATCH_RATE) + (Math.random() < 0.2 ? 2 : 0);
+      for (let i = 0; i < batch; i++) {
+        const p = spawnRingPosition();
+        const t = pickEnemyType(m);
+        const elite = m > 1.5 && Math.random() < Math.min(ELITE_CHANCE_MAX, ELITE_BASE_CHANCE + m * ELITE_TIME_SCALE);
+        spawnEnemy(t, p.x, p.y, elite ? { elite: true } : null);
+      }
+      // occasional pack burst
+      if (m > 1 && Math.random() < 0.12) {
+        const p = spawnRingPosition();
+        const t = pickEnemyType(m);
+        for (let i = 0; i < 6 + (m | 0); i++)
+          spawnEnemy(t, p.x + rand(-60, 60), p.y + rand(-60, 60), null);
+      }
     }
   }
-  // boss
+  // boss cadence (spawnBoss advances index/tier/bossNum itself)
   if (!G.boss && G.time >= G.nextBossAt) {
     spawnBoss();
-    G.bossNum++;
-    G.nextBossAt += 150;
+    G.nextBossAt += BOSS_INTERVAL;
   }
 }
 
+/* ===========================================================================
+   BOSS SYSTEM — registry + spawn + brain (replaces the old inline OVERLORD).
+   Every boss: {id,name,color,r,speed,hpBase,suppressSpawns,drop,phaseThresholds,
+   update(e,dt),draw(e),onPhase?(e,phase)}. The boss enemy carries e.bdef/e.data/
+   e.phase. New Game+: when BOSS_ORDER wraps, bossTier++ (stronger/faster).
+   ========================================================================= */
+const BOSS_ORDER = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden'];
+const BOSS_INTERVAL = 150;             // seconds between bosses
+const BOSS_TIER_HP = 0.6;              // +HP per New Game+ tier
+const BOSS_TIER_SPEED = 0.08;          // +speed per tier
+const BOSS_HP_DIFF_BASE = 0.6, BOSS_HP_DIFF = 0.6;  // difficultyFactor = base + diffScale.hp * mul
+const BOSS_PHASE_SHAKE = 0.4;
+// attack damage as fractions of the boss's own (already diff-scaled) e.dmg
+const B_BULLET = 0.5, B_BEAM = 0.8, B_NOVA = 0.9;
+
+function bossRing(e, n, speed, dmgFrac, rot, color, opts) {
+  for (let k = 0; k < n; k++) {
+    const a = rot + k / n * TAU;
+    spawnEnemyProjectile(e.x, e.y, Math.cos(a) * speed, Math.sin(a) * speed, e.dmg * dmgFrac, color, opts);
+  }
+}
+function countType(t) { let n = 0; for (const e of G.enemies) if (e.type === t && !e.dead) n++; return n; }
+
 function spawnBoss() {
+  const id = BOSS_ORDER[G.bossIndex];
+  const def = BOSSES[id];
   const p = spawnRingPosition();
-  const d = diffScale();
-  const n = G.bossNum;
-  const hp = (900 + n * 700) * (0.6 + d.hp * 0.6);
+  const dsc = diffScale();
+  const difficultyFactor = BOSS_HP_DIFF_BASE + dsc.hp * BOSS_HP_DIFF;
+  const hp = def.hpBase * (1 + G.bossTier * BOSS_TIER_HP) * difficultyFactor;
   const e = spawnEnemy('tank', p.x, p.y, {
-    boss: true, r: 58, hp, maxHp: hp, color: WH, shape: 'boss',
-    speed: 42 * d.speed, dmg: 24 * d.dmg, xp: 60 + n * 20,
-    fireT: 2, summonT: 5, name: 'OVERLORD ' + romanize(n + 1),
+    boss: true, r: def.r, color: def.color, shape: 'boss',
+    hp, maxHp: hp,
+    speed: def.speed * dsc.speed * (1 + G.bossTier * BOSS_TIER_SPEED),
+    dmg: 24 * dsc.dmg, xp: 60 + G.bossNum * 20,
+    name: def.name + (G.bossTier > 0 ? ' ' + romanize(G.bossTier + 1) : ''),
+    bdef: def, data: {}, phase: 0, suppressSpawns: def.suppressSpawns,
   });
   G.boss = e;
+  G.bossIndex++;
+  if (G.bossIndex >= BOSS_ORDER.length) { G.bossTier++; G.bossIndex = 1; } // wrap past intro -> NG+
+  G.bossNum++;
   sfx('boss');
-  G.flash = 0.5; G.flashColor = MA;
+  G.flash = 0.5; G.flashColor = def.color;
   G.shake = 1;
   if (Sound) { Sound.setIntensity(1); Sound.setMusicTempo(126); }
 }
+
+// Called from EBEHAVIOR.boss (movement is still handled by updateEnemies unless a
+// def opts into selfMove). Computes phase, runs the shared transition, then the brain.
+function updateBoss(e, dt) {
+  const fr = e.hp / e.maxHp;
+  let ph = 0;
+  for (const t of e.bdef.phaseThresholds) if (fr <= t) ph++;
+  if (ph > e.phase) {
+    e.phase = ph; e.flash = 1;
+    G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: e.r * 4, life: 0.6, max: 0.6, color: e.color, kind: 'ring' });
+    sfx('boss'); G.shake = Math.min(1, G.shake + BOSS_PHASE_SHAKE);
+    if (e.bdef.onPhase) e.bdef.onPhase(e, e.phase);
+  }
+  e.bdef.update(e, dt);
+}
+
+/* ---- per-boss tuning (named so the fight is easy to balance) ---- */
+const OVL_FIRE = 2.6, OVL_FIRE2 = 2.1, OVL_RINGN = 16, OVL_BSPD = 200, OVL_SUMMON_CD = 6, OVL_SPIRAL_CD = 5.5, OVL_SPIRAL_DUR = 2.5, OVL_SPIRAL_GAP = 0.06, OVL_SPIRAL_SPD = 220;
+const PRISM_BEAM_CD = 3.6, PRISM_BEAM_TELE = 0.9, PRISM_BEAM_FIRE = 1.6, PRISM_BEAM_LEN = 1300, PRISM_BEAM_W = 26, PRISM_BEAM_SWEEP = 0.5, PRISM_SPEC_CD = 4, PRISM_BSPD = 170, PRISM_CLONE_CD = 3.5, PRISM_CLONE_DUR = 4;
+const HIVE_DRONE_CD = 3.2, HIVE_DRONE_CAP = 26, HIVE_WALL_CD = 4.5, HIVE_WALL_TELE = 0.6, HIVE_WALL_SPD = 150, HIVE_EGG_CD = 3.8, HIVE_BSPD = 150;
+const GLITCH_TP_CD = 2.6, GLITCH_BEAM_CD = 4, GLITCH_BEAM_TELE = 0.8, GLITCH_BEAM_FIRE = 0.7, GLITCH_BEAM_W = 150, GLITCH_WAVE_CD = 6, GLITCH_WAVE_R = 240, GLITCH_RAIN_CD = 3, GLITCH_RAIN_TELE = 0.6, GLITCH_RAIN_SPD = 360, GLITCH_HIC_CD = 9;
+const CONDUCTOR_BEAT = 0.476, CONDUCTOR_DROP_BARS = 4, CONDUCTOR_DROP_R = 280, CONDUCTOR_BSPD = 200;
+const WARDEN_PULL = 78, WARDEN_PULL_R = 540, WARDEN_SPIRAL_GAP = 0.13, WARDEN_SPIRAL_SPD = 160, WARDEN_IMP_CD = 8, WARDEN_IMP_R = 360, WARDEN_WELL_CD = 7, WARDEN_WELL_DUR = 4, WARDEN_WELL_R = 190, WARDEN_WELL_PULL = 120;
+
+const BOSSES = {
+  /* ---- SLOT 0: OVERLORD (intro) ---- */
+  overlord: {
+    id: 'overlord', name: 'OVERLORD', color: WH, r: 58, speed: 44, hpBase: 1100,
+    suppressSpawns: false, drop: 'heal', phaseThresholds: [0.5],
+    update(e, dt) {
+      const d = e.data, p2 = e.phase >= 1;
+      d.fireT = (d.fireT ?? OVL_FIRE) - dt;
+      if (d.fireT <= 0) {
+        d.fireT = p2 ? OVL_FIRE2 : OVL_FIRE;
+        bossRing(e, OVL_RINGN, OVL_BSPD, B_BULLET, e.rot, p2 ? MA : WH);
+        if (p2) bossRing(e, OVL_RINGN, OVL_BSPD, B_BULLET, e.rot + Math.PI / OVL_RINGN, MA); // double ring
+        G.shake = Math.min(1, G.shake + 0.05);
+      }
+      d.summonT = (d.summonT ?? OVL_SUMMON_CD) - dt;
+      if (d.summonT <= 0) {
+        d.summonT = OVL_SUMMON_CD;
+        const n = randi(4, 6);
+        for (let k = 0; k < n; k++) { const a = k / n * TAU; spawnEnemy('rusher', e.x + Math.cos(a) * 84, e.y + Math.sin(a) * 84, null); }
+      }
+      if (p2) {
+        d.spiralCD = (d.spiralCD ?? OVL_SPIRAL_CD) - dt;
+        if (d.spiralCD <= 0 && !(d.spiral > 0)) { d.spiral = OVL_SPIRAL_DUR; d.spiralCD = OVL_SPIRAL_CD + OVL_SPIRAL_DUR; e.flash = 1; addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: e.r + 50, dur: 0.7, color: MA }); }
+        if (d.spiral > 0) {
+          d.spiral -= dt;
+          d.spEmit = (d.spEmit ?? 0) - dt;
+          if (d.spEmit <= 0) { d.spEmit = OVL_SPIRAL_GAP; d.spAng = (d.spAng || 0) + 0.4; spawnEnemyProjectile(e.x, e.y, Math.cos(d.spAng) * OVL_SPIRAL_SPD, Math.sin(d.spAng) * OVL_SPIRAL_SPD, e.dmg * B_BULLET, MA); }
+        }
+      }
+    },
+    draw(e) {
+      const c2 = e.phase >= 1 ? MA : WH;
+      glow(e.x, e.y, e.r * 1.7, c2, 0.7);
+      ctx.fillStyle = rgba(c2, 0.16); ctx.strokeStyle = rgba(WH, 0.95); ctx.lineWidth = 4;
+      star(e.x, e.y, e.r, 6, e.rot, 0.6); ctx.fill(); ctx.stroke();
+      const pulse = 1 + 0.08 * Math.sin(G.time * 5);
+      ctx.strokeStyle = rgba(c2, 0.9); ctx.lineWidth = 3;
+      poly(e.x, e.y, e.r * 0.45 * pulse, 6, -e.rot * 1.6); ctx.stroke();
+      glow(e.x, e.y, e.r * 0.3, WH, 0.9);
+    },
+  },
+
+  /* ---- SLOT 1: PRISM — The Refractor ---- */
+  prism: {
+    id: 'prism', name: 'PRISM', color: CY, r: 54, speed: 40, hpBase: 1400,
+    suppressSpawns: false, drop: 'prism', phaseThresholds: [0.66, 0.33],
+    update(e, dt) {
+      const d = e.data, cols = [CY, MA, YE];
+      if (d.beamState === undefined) { d.beamState = 'idle'; d.beamCD = PRISM_BEAM_CD; }
+      // sweeping refraction beams
+      if (d.beamState === 'idle') {
+        d.beamCD -= dt;
+        if (d.beamCD <= 0) { d.beamState = 'tele'; d.beamT = PRISM_BEAM_TELE; d.beamAng = angTo(e.x, e.y, player.x, player.y); d.nb = e.phase + 1;
+          for (let k = 0; k < d.nb; k++) addTelegraph({ kind: 'line', x: e.x, y: e.y, a: d.beamAng + k / d.nb * TAU, len: PRISM_BEAM_LEN, w: 7, dur: PRISM_BEAM_TELE, color: cols[k % 3] }); }
+      } else if (d.beamState === 'tele') {
+        d.beamT -= dt; if (d.beamT <= 0) { d.beamState = 'fire'; d.beamT = PRISM_BEAM_FIRE; }
+      } else {
+        d.beamT -= dt; d.beamAng += PRISM_BEAM_SWEEP * dt * (1 + e.phase * 0.4);
+        for (let k = 0; k < d.nb; k++) {
+          const a = d.beamAng + k / d.nb * TAU, ex = e.x + Math.cos(a) * PRISM_BEAM_LEN, ey = e.y + Math.sin(a) * PRISM_BEAM_LEN;
+          G.beams.push({ x1: e.x, y1: e.y, x2: ex, y2: ey, w: PRISM_BEAM_W, life: 0.05, max: 0.05, color: cols[k % 3] });
+          if (segDist(e.x, e.y, ex, ey, player.x, player.y) < PRISM_BEAM_W / 2 + player.r) hurtPlayer(e.dmg * B_BEAM);
+        }
+        if (d.beamT <= 0) { d.beamState = 'idle'; d.beamCD = PRISM_BEAM_CD; }
+      }
+      // spectrum burst — three gently-homing fans
+      d.specCD = (d.specCD ?? PRISM_SPEC_CD) - dt;
+      if (d.specCD <= 0) {
+        d.specCD = PRISM_SPEC_CD; e.flash = 1;
+        for (let f = 0; f < 3; f++) {
+          const base = angTo(e.x, e.y, player.x, player.y) + (f - 1) * 0.7;
+          for (let k = -2; k <= 2; k++) { const a = base + k * 0.12; spawnEnemyProjectile(e.x, e.y, Math.cos(a) * PRISM_BSPD, Math.sin(a) * PRISM_BSPD, e.dmg * B_BULLET, cols[f], { kind: 'home', turn: 1.1, life: 3 }); }
+        }
+      }
+      // phase 3 — mirror clones
+      if (e.phase >= 2) {
+        d.cloneCD = (d.cloneCD ?? PRISM_CLONE_CD) - dt;
+        if (d.cloneCD <= 0 && (!d.clones || d.clones.length === 0)) {
+          d.cloneCD = PRISM_CLONE_CD + PRISM_CLONE_DUR; d.clones = [];
+          for (let k = 0; k < 2; k++) { const a = rand(0, TAU); const cx = e.x + Math.cos(a) * 170, cy = e.y + Math.sin(a) * 170; d.clones.push({ x: cx, y: cy, t: PRISM_CLONE_DUR, fireT: 1 }); addTelegraph({ kind: 'zone', x: cx, y: cy, r: 44, dur: 0.6, color: CY }); }
+        }
+        if (d.clones) for (let i = d.clones.length - 1; i >= 0; i--) {
+          const cl = d.clones[i]; cl.t -= dt; cl.fireT -= dt;
+          if (cl.fireT <= 0) { cl.fireT = 1.0; const base = angTo(cl.x, cl.y, player.x, player.y); for (let k = -1; k <= 1; k++) { const a = base + k * 0.25; spawnEnemyProjectile(cl.x, cl.y, Math.cos(a) * PRISM_BSPD, Math.sin(a) * PRISM_BSPD, e.dmg * B_BULLET * 0.6, MA, { kind: 'home', turn: 1.0, life: 2.5 }); } }
+          if (cl.t <= 0) d.clones.splice(i, 1);
+        }
+      }
+    },
+    draw(e) {
+      glow(e.x, e.y, e.r * 1.5, WH, 0.55);
+      ctx.fillStyle = rgba(WH, 0.12); ctx.strokeStyle = rgba(WH, 0.95); ctx.lineWidth = 4;
+      poly(e.x, e.y, e.r, 3, e.rot); ctx.fill(); ctx.stroke();
+      glow(e.x, e.y, e.r * 0.4, WH, 0.95);
+      const cols = [CY, MA, YE];
+      for (let k = 0; k < 3; k++) { const a = e.rot + k / 3 * TAU, vx = e.x + Math.cos(a) * e.r * 0.92, vy = e.y + Math.sin(a) * e.r * 0.92, lit = (Math.floor(G.time * 3) % 3) === k; glow(vx, vy, lit ? 13 : 7, cols[k], lit ? 1 : 0.55); }
+      if (e.data.clones) for (const cl of e.data.clones) { ctx.fillStyle = rgba(CY, 0.10); ctx.strokeStyle = rgba(WH, 0.5); ctx.lineWidth = 2; poly(cl.x, cl.y, e.r * 0.7, 3, e.rot); ctx.fill(); ctx.stroke(); }
+    },
+  },
+
+  /* ---- SLOT 2: THE HIVE — Dronemother (the spawner) ---- */
+  hive: {
+    id: 'hive', name: 'THE HIVE', color: GR, r: 58, speed: 34, hpBase: 1800,
+    suppressSpawns: false, drop: 'nectar', phaseThresholds: [0.5],
+    update(e, dt) {
+      const d = e.data, p2 = e.phase >= 1;
+      d.droneCD = (d.droneCD ?? HIVE_DRONE_CD) - dt;
+      if (d.droneCD <= 0) {
+        d.droneCD = p2 ? HIVE_DRONE_CD * 0.6 : HIVE_DRONE_CD;
+        const n = randi(3, 5);
+        for (let k = 0; k < n; k++) { if (countType('mini') >= HIVE_DRONE_CAP) break; const a = k / n * TAU + e.rot; spawnEnemy('mini', e.x + Math.cos(a) * e.r, e.y + Math.sin(a) * e.r, { vx: Math.cos(a) * 90, vy: Math.sin(a) * 90 }); }
+      }
+      d.wallCD = (d.wallCD ?? HIVE_WALL_CD) - dt;
+      if (d.wallCD <= 0) {
+        d.wallCD = HIVE_WALL_CD;
+        const base = angTo(e.x, e.y, player.x, player.y), perp = base + Math.PI / 2, count = 9, gap = randi(2, 6);
+        for (let row = 0; row < 2; row++) for (let k = 0; k < count; k++) {
+          if (Math.abs(k - gap) <= 1) continue;
+          const off = (k - (count - 1) / 2) * 38 + row * 19, ox = Math.cos(base) * -row * 30;
+          spawnEnemyProjectile(e.x + Math.cos(perp) * off + ox, e.y + Math.sin(perp) * off + Math.sin(base) * -row * 30, Math.cos(base) * HIVE_WALL_SPD, Math.sin(base) * HIVE_WALL_SPD, e.dmg * B_BULLET, YE, { arm: HIVE_WALL_TELE, r: 7 });
+        }
+      }
+      d.eggCD = (d.eggCD ?? HIVE_EGG_CD) - dt;
+      if (d.eggCD <= 0) {
+        d.eggCD = HIVE_EGG_CD;
+        const a = angTo(e.x, e.y, player.x, player.y) + rand(-0.4, 0.4);
+        spawnEnemyProjectile(e.x, e.y, Math.cos(a) * 95, Math.sin(a) * 95, e.dmg * B_BULLET, GR, { kind: 'egg', hatch: 1.5, hatchN: randi(6, 8), r: 11, life: 6 });
+      }
+    },
+    draw(e) {
+      const breathe = 1 + 0.06 * Math.sin(G.time * 3);
+      glow(e.x, e.y, e.r * 1.4, GR, 0.5);
+      ctx.fillStyle = rgba(GR, 0.10); ctx.strokeStyle = rgba(GR, 0.85); ctx.lineWidth = 3;
+      poly(e.x, e.y, e.r * breathe, 6, e.rot * 0.2); ctx.fill(); ctx.stroke();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = rgba(YE, 0.5);
+      for (let k = 0; k < 6; k++) { const a = e.rot * 0.2 + k / 6 * TAU, cx = e.x + Math.cos(a) * e.r * 0.5, cy = e.y + Math.sin(a) * e.r * 0.5; poly(cx, cy, e.r * 0.22, 6, e.rot * 0.2); ctx.stroke(); }
+      glow(e.x, e.y, e.r * 0.32 * breathe, YE, 0.9);
+    },
+  },
+
+  /* ---- SLOT 3: GLITCH — The Corrupted ---- */
+  glitch: {
+    id: 'glitch', name: 'GLITCH', color: CY, r: 50, speed: 40, hpBase: 1500,
+    suppressSpawns: true, drop: 'cleansave', phaseThresholds: [0.5],
+    update(e, dt) {
+      const d = e.data, p2 = e.phase >= 1;
+      d.tpCD = (d.tpCD ?? GLITCH_TP_CD) - dt;
+      if (d.tpCD <= 0) {
+        d.tpCD = p2 ? GLITCH_TP_CD * 0.6 : GLITCH_TP_CD;
+        const a = rand(0, TAU), r = rand(140, 320), lim = ARENA / 2 - e.r;
+        e.x = clamp(player.x + Math.cos(a) * r, -lim, lim); e.y = clamp(player.y + Math.sin(a) * r, -lim, lim); e.vx = 0; e.vy = 0; e.glitchJump = 0.2;
+        for (let k = 0; k < 10; k++) spawnParticle(e.x, e.y, rand(-150, 150), rand(-150, 150), 0.3, 3, pick([CY, MA, YE]), 'spark');
+      }
+      if (e.glitchJump > 0) e.glitchJump -= dt;
+      // pixel-sort beam (band)
+      if (d.beamState === undefined) { d.beamState = 'idle'; d.beamCD = GLITCH_BEAM_CD; }
+      if (d.beamState === 'idle') { d.beamCD -= dt; if (d.beamCD <= 0) { d.beamState = 'tele'; d.beamT = GLITCH_BEAM_TELE; d.beamVert = Math.random() < 0.5; d.beamPos = d.beamVert ? player.x : player.y; } }
+      else if (d.beamState === 'tele') { d.beamT -= dt; if (d.beamT <= 0) { d.beamState = 'fire'; d.beamT = GLITCH_BEAM_FIRE; } }
+      else { d.beamT -= dt; const half = GLITCH_BEAM_W / 2 + player.r; if (d.beamVert ? Math.abs(player.x - d.beamPos) < half : Math.abs(player.y - d.beamPos) < half) hurtPlayer(e.dmg * B_BEAM); if (d.beamT <= 0) { d.beamState = 'idle'; d.beamCD = GLITCH_BEAM_CD; } }
+      // screen-tear shockwave
+      d.waveCD = (d.waveCD ?? GLITCH_WAVE_CD) - dt;
+      if (d.waveCD <= 0) { d.waveCD = GLITCH_WAVE_CD; d.wavePending = 0.7; addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: GLITCH_WAVE_R, dur: 0.7, color: MA }); G.glitchFX = Math.max(G.glitchFX, 0.4); }
+      if (d.wavePending > 0) { d.wavePending -= dt; if (d.wavePending <= 0) { explodeAt(e.x, e.y, GLITCH_WAVE_R, MA); G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: 12, mr: GLITCH_WAVE_R, life: 0.5, max: 0.5, color: CY, kind: 'ring' }); if (dist(e.x, e.y, player.x, player.y) < GLITCH_WAVE_R + player.r) { hurtPlayer(e.dmg * B_BULLET); const a = angTo(e.x, e.y, player.x, player.y); player.vx += Math.cos(a) * 320; player.vy += Math.sin(a) * 320; } } }
+      // ERROR rain
+      d.rainCD = (d.rainCD ?? GLITCH_RAIN_CD) - dt;
+      if (d.rainCD <= 0) { d.rainCD = GLITCH_RAIN_CD; const n = randi(5, 8); for (let k = 0; k < n; k++) { const px = player.x + rand(-320, 320); spawnEnemyProjectile(px, player.y - 440, 0, GLITCH_RAIN_SPD, e.dmg * B_BULLET, CY, { kind: 'square', r: 8, arm: GLITCH_RAIN_TELE, life: 5 }); } }
+      // phase 2 — glitch hiccup (mostly visual; brief, telegraphed, rare)
+      if (p2) { d.hicCD = (d.hicCD ?? GLITCH_HIC_CD) - dt; if (d.hicCD <= 0) { d.hicCD = GLITCH_HIC_CD; G.glitchFX = 1; G.inputHiccup = 0.3; } }
+    },
+    draw(e) {
+      const j = e.glitchJump > 0 ? rand(-4, 4) : 0, off = 4 + (e.phase >= 1 ? 3 : 0) + (e.glitchJump > 0 ? 5 : 0);
+      const d = e.data;
+      if (d.beamState === 'tele' || d.beamState === 'fire') {
+        const fire = d.beamState === 'fire';
+        ctx.fillStyle = rgba(fire ? CY : MA, fire ? 0.28 : 0.12 + 0.1 * Math.sin(G.time * 40));
+        if (d.beamVert) ctx.fillRect(d.beamPos - GLITCH_BEAM_W / 2, player.y - 2200, GLITCH_BEAM_W, 4400);
+        else ctx.fillRect(player.x - 2200, d.beamPos - GLITCH_BEAM_W / 2, 4400, GLITCH_BEAM_W);
+      }
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = rgba(CY, 0.8); poly(e.x - off + j, e.y, e.r, 4, e.rot); ctx.stroke();
+      ctx.strokeStyle = rgba(MA, 0.8); poly(e.x + off, e.y + j, e.r, 4, e.rot); ctx.stroke();
+      ctx.strokeStyle = rgba(YE, 0.7); poly(e.x, e.y - off, e.r, 4, e.rot); ctx.stroke();
+      ctx.fillStyle = rgba('#05030f', 0.6); poly(e.x, e.y, e.r * 0.8, 4, e.rot); ctx.fill();
+      glow(e.x, e.y, e.r * 0.6, WH, 0.4);
+    },
+  },
+
+  /* ---- SLOT 4: THE CONDUCTOR — Synthwave Heart ---- */
+  conductor: {
+    id: 'conductor', name: 'THE CONDUCTOR', color: MA, r: 50, speed: 38, hpBase: 1700,
+    suppressSpawns: true, drop: 'tempo', phaseThresholds: [0.66, 0.33],
+    update(e, dt) {
+      const d = e.data;
+      if (d.beat === undefined) { d.beat = 0; d.beatT = 0; d.bars = 0; }
+      if (d.dropPending > 0) { d.dropPending -= dt; if (d.dropPending <= 0) { bossRing(e, 40, 230, B_NOVA, rand(0, TAU), MA); G.shake = Math.min(1, G.shake + 0.35); if (Sound) Sound.setIntensity(1); } }
+      d.beatT -= dt;
+      if (d.beatT <= 0) {
+        d.beatT += CONDUCTOR_BEAT / (1 + e.phase * 0.12); d.beat++; e.flash = 0.6;
+        if (d.beat % 2 === 0) bossRing(e, 12, CONDUCTOR_BSPD, B_BULLET, e.rot, CY);
+        else for (let k = 0; k < 4; k++) { const a = e.rot + k / 4 * TAU; for (let s = -1; s <= 1; s++) spawnEnemyProjectile(e.x, e.y, Math.cos(a + s * 0.12) * (CONDUCTOR_BSPD + 10), Math.sin(a + s * 0.12) * (CONDUCTOR_BSPD + 10), e.dmg * B_BULLET, MA); }
+        if (e.phase >= 1 && d.beat % 4 === 0) { const base = rand(0, TAU); for (let k = 0; k < 24; k++) { if (k % 6 === 0) continue; const a = base + k / 24 * TAU; spawnEnemyProjectile(e.x, e.y, Math.cos(a) * 150, Math.sin(a) * 150, e.dmg * B_BULLET, CY, { kind: 'curve', spin: 0.6, life: 4 }); } }
+        if (d.beat % 4 === 0) { d.bars++; if (d.bars % CONDUCTOR_DROP_BARS === 0) { addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: CONDUCTOR_DROP_R, dur: 1.2, color: MA }); d.dropPending = 1.2; e.flash = 1; } }
+        if (e.phase >= 2) { d.arp = 8; d.arpAng = e.rot; }
+      }
+      if (d.arp > 0) { d.arpEmit = (d.arpEmit ?? 0) - dt; if (d.arpEmit <= 0) { d.arpEmit = 0.04; d.arpAng += 0.5; spawnEnemyProjectile(e.x, e.y, Math.cos(d.arpAng) * 230, Math.sin(d.arpAng) * 230, e.dmg * B_BULLET, YE); d.arp--; } }
+    },
+    draw(e) {
+      const beatPhase = 1 - clamp((e.data.beatT || 0) / CONDUCTOR_BEAT, 0, 1);
+      glow(e.x, e.y, e.r * 1.3, e.flash > 0.3 ? WH : MA, 0.6);
+      ctx.strokeStyle = rgba(CY, 0.9); ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(e.x, e.y, e.r * 0.7, 0, TAU); ctx.stroke();
+      const bars = 24;
+      for (let k = 0; k < bars; k++) { const a = k / bars * TAU + e.rot * 0.3, h = e.r * 0.5 + e.r * 0.7 * Math.abs(Math.sin(G.time * 6 + k * 0.5)) * (0.5 + beatPhase * 0.5); const x1 = e.x + Math.cos(a) * e.r * 0.8, y1 = e.y + Math.sin(a) * e.r * 0.8, x2 = e.x + Math.cos(a) * (e.r * 0.8 + h), y2 = e.y + Math.sin(a) * (e.r * 0.8 + h); ctx.strokeStyle = rgba(k % 2 ? MA : CY, 0.8); ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
+      glow(e.x, e.y, e.r * 0.3 * (1 + 0.25 * beatPhase), MA, 0.95);
+    },
+  },
+
+  /* ---- SLOT 5: WARDEN — The Gravity Well ---- */
+  warden: {
+    id: 'warden', name: 'THE WARDEN', color: PU, r: 54, speed: 40, hpBase: 1900,
+    suppressSpawns: true, drop: 'singularity', phaseThresholds: [0.66, 0.33],
+    update(e, dt) {
+      const d = e.data, lim = ARENA / 2 - player.r;
+      // continuous gravity pull (gentle, escapable by moving/dashing)
+      const ga = angTo(player.x, player.y, e.x, e.y), gd = dist(player.x, player.y, e.x, e.y);
+      if (gd < WARDEN_PULL_R && gd > player.r + e.r) { player.x = clamp(player.x + Math.cos(ga) * WARDEN_PULL * dt, -lim, lim); player.y = clamp(player.y + Math.sin(ga) * WARDEN_PULL * dt, -lim, lim); }
+      // spiral bullets
+      d.spAng = (d.spAng || 0) + dt * 1.2; d.spEmit = (d.spEmit ?? 0) - dt;
+      if (d.spEmit <= 0) { d.spEmit = WARDEN_SPIRAL_GAP; for (let arm = 0; arm < 2; arm++) { const a = d.spAng + arm * Math.PI; spawnEnemyProjectile(e.x, e.y, Math.cos(a) * WARDEN_SPIRAL_SPD, Math.sin(a) * WARDEN_SPIRAL_SPD, e.dmg * B_BULLET, BL, { kind: 'curve', spin: 0.5, life: 4 }); } }
+      // implosion -> explosion
+      d.impCD = (d.impCD ?? WARDEN_IMP_CD) - dt;
+      if (d.impCD <= 0 && !(d.imp > 0)) { d.imp = 1.5; d.impCD = WARDEN_IMP_CD + 1.5; addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: WARDEN_IMP_R, dur: 1.5, color: PU }); }
+      if (d.imp > 0) { d.imp -= dt; if (Math.random() < 0.5) { const a = rand(0, TAU); spawnParticle(e.x + Math.cos(a) * WARDEN_IMP_R, e.y + Math.sin(a) * WARDEN_IMP_R, -Math.cos(a) * 220, -Math.sin(a) * 220, 0.45, 3, PU, 'spark'); } if (d.imp <= 0) { bossRing(e, 44, 240, B_NOVA, rand(0, TAU), PU); bossRing(e, 44, 180, B_BULLET, rand(0, TAU), BL); G.shake = Math.min(1, G.shake + 0.3); } }
+      // phase 2 — mini singularities
+      if (e.phase >= 1) {
+        d.wellCD = (d.wellCD ?? WARDEN_WELL_CD) - dt;
+        if (d.wellCD <= 0 && (!d.wells || d.wells.length === 0)) { d.wellCD = WARDEN_WELL_CD; d.wells = []; const n = randi(2, 3); for (let k = 0; k < n; k++) { const a = rand(0, TAU), r = rand(160, 300), wlim = ARENA / 2 - 40, wx = clamp(player.x + Math.cos(a) * r, -wlim, wlim), wy = clamp(player.y + Math.sin(a) * r, -wlim, wlim); d.wells.push({ x: wx, y: wy, t: WARDEN_WELL_DUR, fireT: rand(0, 0.5) }); addTelegraph({ kind: 'zone', x: wx, y: wy, r: 80, dur: 0.8, color: PU }); } }
+        if (d.wells) for (let i = d.wells.length - 1; i >= 0; i--) { const w = d.wells[i]; w.t -= dt; const wa = angTo(player.x, player.y, w.x, w.y), wd = dist(player.x, player.y, w.x, w.y); if (wd < WARDEN_WELL_R && wd > 30) { player.x = clamp(player.x + Math.cos(wa) * WARDEN_WELL_PULL * dt, -lim, lim); player.y = clamp(player.y + Math.sin(wa) * WARDEN_WELL_PULL * dt, -lim, lim); } w.fireT -= dt; if (w.fireT <= 0) { w.fireT = 0.7; bossRing({ x: w.x, y: w.y, dmg: e.dmg }, 6, 140, B_BULLET, rand(0, TAU), PU); } if (w.t <= 0) d.wells.splice(i, 1); }
+      }
+    },
+    draw(e) {
+      glow(e.x, e.y, e.r * 1.2, PU, 0.5);
+      ctx.strokeStyle = rgba(BL, 0.18); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(e.x, e.y, WARDEN_PULL_R, 0, TAU); ctx.stroke();
+      for (let k = 0; k < 3; k++) { const rr = e.r * (0.6 + k * 0.28); ctx.strokeStyle = rgba(k % 2 ? PU : BL, 0.7); ctx.lineWidth = 3; ctx.beginPath(); for (let s = 0; s <= 24; s++) { const a = e.rot * (1 + k * 0.3) + s / 24 * TAU, x = e.x + Math.cos(a) * rr, y = e.y + Math.sin(a) * rr; if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); } ctx.stroke(); }
+      ctx.fillStyle = rgba('#05030f', 0.92); ctx.beginPath(); ctx.arc(e.x, e.y, e.r * 0.5, 0, TAU); ctx.fill();
+      glow(e.x, e.y, e.r * 0.3, PU, 0.85);
+      if (e.data.wells) for (const w of e.data.wells) { glow(w.x, w.y, 20, PU, 0.7); ctx.strokeStyle = rgba(BL, 0.5); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(w.x, w.y, WARDEN_WELL_R, 0, TAU); ctx.stroke(); ctx.fillStyle = rgba('#05030f', 0.85); ctx.beginPath(); ctx.arc(w.x, w.y, 10, 0, TAU); ctx.fill(); }
+    },
+  },
+};
 function romanize(n) { return ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'][n - 1] || ('#' + n); }
 
 /* ---- Telegraphs: fading warning shapes drawn ~0.6-1.0s before a hit lands.
@@ -1395,24 +1719,8 @@ const EBEHAVIOR = {
   },
   boss: {
     move(e, c, dt) {
-      c.sp = e.speed;
-      e.fireT -= dt; e.summonT -= dt;
-      if (e.fireT <= 0) {
-        e.fireT = 2.6;
-        const n = 14 + G.bossNum * 2;
-        for (let k = 0; k < n; k++) {
-          const a = e.rot + k / n * TAU;
-          spawnEnemyProjectile(e.x, e.y, Math.cos(a) * 200, Math.sin(a) * 200, e.dmg * 0.6, MA);
-        }
-        G.shake = Math.min(1, G.shake + 0.2);
-      }
-      if (e.summonT <= 0) {
-        e.summonT = 6;
-        for (let k = 0; k < 4 + G.bossNum; k++) {
-          const a = rand(0, TAU);
-          spawnEnemy('rusher', e.x + Math.cos(a) * 70, e.y + Math.sin(a) * 70, null);
-        }
-      }
+      c.sp = (e.bdef && e.bdef.selfMove) ? 0 : e.speed;   // slow chase unless the def drives itself
+      updateBoss(e, dt);
     },
   },
 
@@ -1664,15 +1972,37 @@ function updateEnemies(dt) {
   }
 }
 
-function spawnEnemyProjectile(x, y, vx, vy, dmg, color) {
-  G.eProj.push({ x, y, vx, vy, r: 7, dmg, color, life: 4 });
+function spawnEnemyProjectile(x, y, vx, vy, dmg, color, opts) {
+  if (G.eProj.length >= MAX_EPROJ) G.eProj.shift();   // bound the bullet pool
+  const p = { x, y, vx, vy, r: 7, dmg, color, life: 4 };
+  if (opts) Object.assign(p, opts);                   // kind/r/life/arm/hatch/turn/spin...
+  G.eProj.push(p);
+  return p;
 }
+const EBULLET_CULL = 1600;
 function updateEnemyProjectiles(dt) {
   const arr = G.eProj;
   for (let i = arr.length - 1; i >= 0; i--) {
     const p = arr[i];
+    if (p.arm > 0) { p.arm -= dt; continue; }          // telegraphing: faint, stationary, harmless
+    if (p.kind === 'home') {                            // gentle seeker
+      const a = angTo(p.x, p.y, player.x, player.y), ca = Math.atan2(p.vy, p.vx);
+      let da = a - ca; while (da > Math.PI) da -= TAU; while (da < -Math.PI) da += TAU;
+      const turn = (p.turn || 2) * dt, na = ca + clamp(da, -turn, turn), sp = Math.hypot(p.vx, p.vy);
+      p.vx = Math.cos(na) * sp; p.vy = Math.sin(na) * sp;
+    } else if (p.kind === 'curve') {                   // spiral
+      const a = Math.atan2(p.vy, p.vx) + (p.spin || 0) * dt, sp = Math.hypot(p.vx, p.vy);
+      p.vx = Math.cos(a) * sp; p.vy = Math.sin(a) * sp;
+    } else if (p.kind === 'egg') {                      // hatches into a burst
+      p.hatch -= dt;
+      if (p.hatch <= 0) {
+        const n = p.hatchN || 6;
+        for (let k = 0; k < n; k++) { const aa = k / n * TAU; spawnEnemyProjectile(p.x, p.y, Math.cos(aa) * 210, Math.sin(aa) * 210, p.dmg, p.color, { kind: 'home', turn: 1.4, life: 2.4, r: 6 }); }
+        arr.splice(i, 1); continue;
+      }
+    }
     p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
-    if (p.life <= 0 || dist2(p.x, p.y, player.x, player.y) > 1600 * 1600) { arr.splice(i, 1); continue; }
+    if (p.life <= 0 || dist2(p.x, p.y, player.x, player.y) > EBULLET_CULL * EBULLET_CULL) { arr.splice(i, 1); continue; }
     if (dist2(p.x, p.y, player.x, player.y) < (p.r + player.r) ** 2) {
       hurtPlayer(p.dmg);
       arr.splice(i, 1);
@@ -1698,7 +2028,9 @@ function explodeAt(x, y, radius, color) {
     spawnParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(0.25, 0.55), rand(2, 5), color, 'spark');
   }
   sfx('explode');
-  G.shake = Math.min(1, G.shake + 0.22);
+  // Keep the screen readable during bullet-hell: damp explosion shake when a boss
+  // fight has a lot of bullets on screen.
+  G.shake = Math.min(1, G.shake + 0.22 * (G.boss && G.eProj.length > 150 ? 0.4 : 1));
 }
 
 function damageEnemy(e, dmg, opts) {
@@ -1740,7 +2072,11 @@ function killEnemy(e, reward) {
   if (e.dead) return;
   e.dead = true;
   explodeAt(e.x, e.y, e.boss ? 200 : (e.elite ? 90 : 40), e.color);
-  if (e.boss) { sfx('bigExplode'); G.hitstop = 0.12; G.flash = 0.5; G.flashColor = e.color; if (Sound) { Sound.setIntensity(0.5); Sound.setMusicTempo(116); } }
+  if (e.boss) {
+    sfx('bigExplode'); G.hitstop = 0.12; G.flash = 0.5; G.flashColor = e.color;
+    if (Sound) { Sound.setIntensity(0.5); Sound.setMusicTempo(116); }
+    if (e.bdef) { spawnPickup(e.x, e.y, e.bdef.drop); spawnPickup(e.x + 44, e.y, 'heal'); } // exclusive drop + heal
+  }
 
   if (reward !== false) {
     G.kills++;
@@ -1753,9 +2089,8 @@ function killEnemy(e, reward) {
     for (let i = 0; i < gemN; i++)
       spawnGem(e.x + rand(-e.r, e.r), e.y + rand(-e.r, e.r), Math.max(1, Math.round(e.xp / (e.boss ? 1 : 1))));
 
-    // pickups
-    if (e.boss) { spawnPickup(e.x, e.y, 'heal'); spawnPickup(e.x + 40, e.y, 'bomb'); spawnPickup(e.x - 40, e.y, 'magnet'); }
-    else if (e.elite) spawnPickup(e.x, e.y, pick(['heal', 'magnet', 'bomb']));
+    // pickups (boss drops handled in the boss branch above)
+    if (e.elite) spawnPickup(e.x, e.y, pick(['heal', 'magnet', 'bomb']));
     else {
       const roll = Math.random();
       if (roll < DROP_HEAL_CHANCE) spawnPickup(e.x, e.y, 'heal');
@@ -1788,6 +2123,7 @@ function spawnGem(x, y, value) {
   }
   G.gems.push({ x, y, value, vx: rand(-40, 40), vy: rand(-40, 40), mag: false, t: 0 });
 }
+const PICKUP_COLOR = { heal: GR, magnet: BL, bomb: OR, prism: CY, nectar: GR, cleansave: MA, tempo: CY, singularity: PU };
 function spawnPickup(x, y, type) {
   G.pickups.push({ x, y, type, t: 0, vy: 0 });
 }
@@ -1795,6 +2131,8 @@ function spawnPickup(x, y, type) {
 function updateGems(dt) {
   const arr = G.gems;
   const pr = S().pickup;
+  // Queen's Nectar: continuously magnetize every on-screen gem while active.
+  if (player.buffT.nectar > 0) { const os = Math.hypot(W, H) / 2; for (const g of arr) if (dist(g.x, g.y, player.x, player.y) <= os) g.mag = true; }
   for (let i = arr.length - 1; i >= 0; i--) {
     const g = arr[i];
     g.t += dt;
@@ -1820,6 +2158,26 @@ function updatePickups(dt) {
     }
   }
 }
+
+// Timed boss buffs. triple/nectar are hooked centrally (firePlayerProjectile,
+// updateGems, addXp); aura damages around the player on a tick.
+const AURA_RADIUS = 130, AURA_DMG = 26, AURA_TICK = 0.25;
+function updateBuffs(dt) {
+  const b = player.buffT;
+  if (b.triple > 0) b.triple -= dt;
+  if (b.nectar > 0) b.nectar -= dt;
+  if (b.aura > 0) {
+    b.aura -= dt;
+    b.auraTick -= dt;
+    if (b.auraTick <= 0) {
+      b.auraTick = AURA_TICK;
+      const R = AURA_RADIUS * Math.sqrt(S().areaMul);
+      grid.query(player.x, player.y, R, _wq);
+      for (let j = 0; j < _wq.length; j++) { const e = _wq[j]; if (e.dead) continue; if (dist2(player.x, player.y, e.x, e.y) < (R + e.r) ** 2) damageEnemy(e, AURA_DMG * S().damageMul, { color: PU, silent: true }); }
+    }
+  }
+}
+const BUFF_TRIPLE_T = 12, BUFF_NECTAR_T = 12, BUFF_AURA_T = 10, CLEANSAVE_INVULN = 2.5, TEMPO_MUL = 1.08;
 function applyPickup(type) {
   if (type === 'heal') {
     player.hp = Math.min(player.maxHp, player.hp + player.maxHp * 0.3);
@@ -1840,11 +2198,32 @@ function applyPickup(type) {
     for (const e of G.enemies.slice()) { if (e.boss) continue; killEnemy(e, false); }
     G.eProj.length = 0;
     floater(player.x, player.y - 24, 'BOOM', OR, 22);
+  } else if (type === 'prism') {            // Prism Shard — triple-fire
+    player.buffT.triple = BUFF_TRIPLE_T;
+    floater(player.x, player.y - 24, 'PRISM SHARD', CY, 18); sfx('coin');
+    for (let i = 0; i < 14; i++) spawnParticle(player.x, player.y, rand(-120, 120), rand(-120, 120), 0.5, 3, CY, 'spark');
+  } else if (type === 'nectar') {           // Queen's Nectar — magnet + x2 XP
+    player.buffT.nectar = BUFF_NECTAR_T;
+    floater(player.x, player.y - 24, "QUEEN'S NECTAR", GR, 18); sfx('coin');
+    for (let i = 0; i < 14; i++) spawnParticle(player.x, player.y, rand(-120, 120), rand(-120, 120), 0.5, 3, YE, 'spark');
+  } else if (type === 'cleansave') {        // Clean Save — full heal + invuln
+    player.hp = player.maxHp; player.invuln = Math.max(player.invuln, CLEANSAVE_INVULN);
+    floater(player.x, player.y - 24, 'CLEAN SAVE', MA, 18); sfx('coin');
+    for (let i = 0; i < 18; i++) spawnParticle(player.x, player.y, rand(-150, 150), rand(-150, 150), 0.6, 3, MA, 'spark');
+  } else if (type === 'tempo') {            // Tempo Core — permanent attack-speed stack
+    player.stats.attackSpeedMul *= TEMPO_MUL;
+    floater(player.x, player.y - 24, 'TEMPO+', CY, 18); sfx('coin');
+    for (let i = 0; i < 12; i++) spawnParticle(player.x, player.y, rand(-110, 110), rand(-110, 110), 0.45, 3, CY, 'spark');
+  } else if (type === 'singularity') {      // Singularity Fragment — magnetize all + damage aura
+    const os = Math.hypot(W, H) / 2; for (const g of G.gems) if (dist(g.x, g.y, player.x, player.y) <= os) g.mag = true;
+    player.buffT.aura = BUFF_AURA_T; player.buffT.auraTick = 0;
+    floater(player.x, player.y - 24, 'SINGULARITY', PU, 18); sfx('coin');
+    for (let i = 0; i < 16; i++) spawnParticle(player.x, player.y, rand(-130, 130), rand(-130, 130), 0.6, 3, PU, 'spark');
   }
 }
 
 function addXp(v) {
-  player.xp += v * S().xpGain;
+  player.xp += v * S().xpGain * (player.buffT.nectar > 0 ? 2 : 1);   // Queen's Nectar doubles XP
   while (player.xp >= player.xpNext) {
     player.xp -= player.xpNext;
     player.level++;
@@ -1985,6 +2364,7 @@ function update(dt) {
 
   // input → movement
   const mv = moveVector();
+  if (G.inputHiccup > 0) { G.inputHiccup -= dt; mv.x = 0; mv.y = 0; mv.mag = 0; }   // GLITCH boss hiccup
   const speed = BASE_SPEED * S().moveSpeedMul;
   if (player.dashTime > 0) {
     player.dashTime -= dt;
@@ -2019,6 +2399,7 @@ function update(dt) {
 
   // weapons
   for (const w of player.weapons) WEAPONS[w.id].update(w, dt);
+  updateBuffs(dt);
 
   // entities
   updateProjectiles(dt);
@@ -2033,6 +2414,7 @@ function update(dt) {
   G.cam.y = lerp(G.cam.y, player.y, 0.12);
   G.shake = Math.max(0, G.shake - dt * 1.6);
   if (G.flash > 0) G.flash = Math.max(0, G.flash - dt * 2.4);
+  if (G.glitchFX > 0) G.glitchFX = Math.max(0, G.glitchFX - dt * 1.5);
 
   // music intensity ramps with on-screen pressure + time
   if (Sound) Sound.setIntensity(clamp(G.enemies.length / 120 + G.time / 600 + (G.boss ? 0.5 : 0), 0, 1));
@@ -2146,9 +2528,9 @@ function render() {
   // gems
   for (const g of G.gems) glow(g.x, g.y, 7, GR, 0.8);
   // pickups
-  for (const p of G.pickups) { const c = p.type === 'heal' ? GR : p.type === 'magnet' ? BL : OR; glow(p.x, p.y, 16 + Math.sin(p.t * 6) * 3, c, 0.9); }
+  for (const p of G.pickups) { const c = PICKUP_COLOR[p.type] || WH; glow(p.x, p.y, 16 + Math.sin(p.t * 6) * 3, c, 0.9); }
   // enemy projectiles
-  for (const p of G.eProj) glow(p.x, p.y, p.r * 2.2, p.color, 0.9);
+  for (const p of G.eProj) glow(p.x, p.y, p.r * 2.2, p.color, p.arm > 0 ? 0.3 : 0.9);
   // enemy glows
   for (const e of G.enemies) glow(e.x, e.y, e.r * (e.boss ? 2.2 : 1.9), e.flash > 0.3 ? WH : e.color, e.boss ? 0.8 : 0.6);
   // player projectiles
@@ -2216,16 +2598,28 @@ function render() {
 
   // pickups: hex badge + vector glyph (no fonts -> crisp everywhere)
   for (const p of G.pickups) {
-    const c = p.type === 'heal' ? GR : p.type === 'magnet' ? BL : OR;
+    const c = PICKUP_COLOR[p.type] || WH;
     ctx.fillStyle = rgba(c, 0.18); ctx.strokeStyle = c; ctx.lineWidth = 2;
     poly(p.x, p.y, 13, 6, p.t * 2); ctx.fill(); ctx.stroke();
     ctx.save(); ctx.translate(p.x, p.y); ctx.strokeStyle = WH; ctx.fillStyle = WH; ctx.lineWidth = 2.4; ctx.lineCap = 'round';
-    if (p.type === 'heal') {            // plus
+    if (p.type === 'heal') {                 // plus
       ctx.beginPath(); ctx.moveTo(-5, 0); ctx.lineTo(5, 0); ctx.moveTo(0, -5); ctx.lineTo(0, 5); ctx.stroke();
-    } else if (p.type === 'magnet') {   // horseshoe magnet
+    } else if (p.type === 'magnet') {        // horseshoe magnet
       ctx.beginPath(); ctx.arc(0, -1, 5, Math.PI, 0); ctx.moveTo(-5, -1); ctx.lineTo(-5, 4); ctx.moveTo(5, -1); ctx.lineTo(5, 4); ctx.stroke();
-    } else {                            // bomb -> starburst
+    } else if (p.type === 'bomb') {          // starburst
       star(0, 0, 6, 4, p.t * 3, 0.4); ctx.fill();
+    } else if (p.type === 'prism') {         // triangle (refraction)
+      poly(0, 0, 6, 3, p.t * 2); ctx.stroke();
+    } else if (p.type === 'nectar') {        // honeycomb cell
+      poly(0, 0, 6, 6, 0); ctx.stroke();
+    } else if (p.type === 'cleansave') {     // refresh loop
+      ctx.beginPath(); ctx.arc(0, 0, 5, 0.5, Math.PI * 1.9); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(4, -4); ctx.lineTo(6, 0); ctx.lineTo(1, -1); ctx.stroke();
+    } else if (p.type === 'tempo') {         // fast-forward >>
+      ctx.beginPath(); ctx.moveTo(-5, -4); ctx.lineTo(0, 0); ctx.lineTo(-5, 4); ctx.moveTo(0, -4); ctx.lineTo(5, 0); ctx.lineTo(0, 4); ctx.stroke();
+    } else if (p.type === 'singularity') {   // ring + core
+      ctx.beginPath(); ctx.arc(0, 0, 5, 0, TAU); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, 2, 0, TAU); ctx.fill();
     }
     ctx.restore();
   }
@@ -2233,6 +2627,7 @@ function render() {
   for (const g of G.gems) { ctx.fillStyle = GR; poly(g.x, g.y, 4.5, 4, G.time * 3); ctx.fill(); }
   // enemies
   for (const e of G.enemies) {
+    if (e.boss && e.bdef) { e.bdef.draw(e); continue; }   // bosses render their own procedural body
     const phasing = e.type === 'phantom' && e.intangible > 0;
     if (phasing) ctx.globalAlpha = (e.phState === 'fade') ? clamp(0.25 + 0.7 * (e.ghostA ?? 1), 0.25, 1) : 0.3; // fade-out telegraph, then ghostly
     ctx.lineWidth = e.boss ? 4 : (e.type === 'juggernaut' ? 3.2 : 2.2);
@@ -2256,7 +2651,12 @@ function render() {
     }
   }
   // enemy projectiles core
-  for (const p of G.eProj) { ctx.fillStyle = WH; ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.5, 0, TAU); ctx.fill(); }
+  for (const p of G.eProj) {
+    if (p.arm > 0) { ctx.fillStyle = rgba(p.color, 0.4); ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.4, 0, TAU); ctx.fill(); continue; } // telegraphing
+    ctx.fillStyle = WH;
+    if (p.kind === 'square') { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(G.time * 6); ctx.fillRect(-p.r * 0.5, -p.r * 0.5, p.r, p.r); ctx.restore(); }
+    else { ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.5, 0, TAU); ctx.fill(); }
+  }
   // player projectile cores
   for (const p of G.pProj) {
     ctx.fillStyle = WH;
@@ -2366,14 +2766,34 @@ function drawHUD() {
     if (wx > W - 80) break;
   }
 
-  // boss bar
+  // active boss buffs: small icon + shrinking time bar
+  {
+    const buffs = [];
+    if (player.buffT.triple > 0) buffs.push(['T', CY, player.buffT.triple / BUFF_TRIPLE_T]);
+    if (player.buffT.nectar > 0) buffs.push(['N', GR, player.buffT.nectar / BUFF_NECTAR_T]);
+    if (player.buffT.aura > 0) buffs.push(['A', PU, player.buffT.aura / BUFF_AURA_T]);
+    let bxp = pad; const byp = wy - 22;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const bf of buffs) {
+      ctx.fillStyle = rgba(bf[1], 0.9); ctx.beginPath(); ctx.arc(bxp + 7, byp, 7, 0, TAU); ctx.fill();
+      ctx.fillStyle = rgba('#05030f', 0.95); ctx.font = '800 9px Segoe UI, sans-serif'; ctx.fillText(bf[0], bxp + 7, byp + 0.5);
+      ctx.fillStyle = rgba('#000', 0.5); ctx.fillRect(bxp, byp + 9, 28, 3);
+      ctx.fillStyle = bf[1]; ctx.fillRect(bxp, byp + 9, 28 * clamp(bf[2], 0, 1), 3);
+      bxp += 36;
+    }
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  // boss bar + phase pips
   if (G.boss) {
-    const bw = Math.min(560, W - 40), bx = (W - bw) / 2, by = 78, bh = 14;
+    const b = G.boss, bw = Math.min(560, W - 40), bx = (W - bw) / 2, by = 78, bh = 14;
     ctx.fillStyle = rgba('#000', 0.5); ctx.fillRect(bx, by, bw, bh);
-    ctx.fillStyle = MA; ctx.fillRect(bx, by, bw * clamp(G.boss.hp / G.boss.maxHp, 0, 1), bh);
+    ctx.fillStyle = b.color || MA; ctx.fillRect(bx, by, bw * clamp(b.hp / b.maxHp, 0, 1), bh);
     ctx.strokeStyle = rgba(WH, 0.5); ctx.lineWidth = 1; ctx.strokeRect(bx, by, bw, bh);
     ctx.fillStyle = WH; ctx.font = '800 12px Segoe UI, sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText('☣ ' + (G.boss.name || 'BOSS'), W / 2, by - 9);
+    ctx.fillText('☣ ' + (b.name || 'BOSS'), W / 2, by - 9);
+    const nph = b.bdef ? b.bdef.phaseThresholds.length : 0;
+    for (let i = 0; i < nph; i++) { const px = bx + bw - 8 - i * 16, py = by + bh + 8; ctx.fillStyle = (i < b.phase) ? (b.color || MA) : rgba(WH, 0.2); ctx.beginPath(); ctx.arc(px, py, 4, 0, TAU); ctx.fill(); }
   }
 
   // low HP vignette
@@ -2382,6 +2802,13 @@ function drawHUD() {
     const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.7);
     v.addColorStop(0, 'rgba(255,40,60,0)'); v.addColorStop(1, `rgba(255,30,50,${pulse})`);
     ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+  }
+
+  // GLITCH boss screen overlay (cheap channel-split scanlines)
+  if (G.glitchFX > 0) {
+    const a = G.glitchFX;
+    for (let i = 0; i < 6; i++) { const yy = Math.random() * H; ctx.fillStyle = rgba(pick([CY, MA, YE]), 0.12 * a); ctx.fillRect(0, yy, W, rand(2, 14)); }
+    ctx.fillStyle = rgba(MA, 0.05 * a); ctx.fillRect(0, 0, W, H);
   }
 }
 
@@ -2438,10 +2865,12 @@ function startGame() {
     enemies: [], eProj: [], pProj: [], gems: [], pickups: [],
     particles: [], floaters: [], beams: [], arcs: [], telegraphs: [],
     kills: 0, score: 0, combo: 0, comboTimer: 0,
-    pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: 75, bossNum: 0, boss: null, frost: null, playerSlow: 1,
+    pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: 75, bossNum: 0, bossIndex: 0, bossTier: 0,
+    inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });
   enemyId = 1;
   player.x = player.y = 0; player.vx = player.vy = 0;
+  player.buffT = { triple: 0, nectar: 0, aura: 0, auraTick: 0 };
   player.level = 1; player.xp = 0; player.xpNext = 6;
   player.invuln = 0; player.dashCD = 0; player.dashTime = 0;
   player.weapons = []; player.passives = {};

@@ -4,6 +4,51 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v1.5 — 2026-06-09 — Boss system + buffs + six bosses
+
+A full, extensible boss system replaces the single inline OVERLORD.
+
+### Architecture
+- `BOSSES` registry (like WEAPONS/ETYPES): each boss has `update`/`draw`/optional
+  `onPhase`, HP-based `phaseThresholds`, an exclusive `drop`, and a
+  `suppressSpawns` flag. `BOSS_ORDER` defines appearance order; `spawnBoss()` now
+  builds from the registry. New Game+: when the order wraps, `bossTier++` (bosses
+  return with more HP/speed) and it loops to the first roster boss — never back to
+  the intro OVERLORD.
+- The inline boss behaviour moved to `updateBoss()`, which derives the phase from
+  HP, plays a shared transition (flash + shockwave + sfx + brief shake) and runs
+  the boss brain. Bosses still slow-chase by default.
+- `director()` skips normal waves while a `suppressSpawns` boss is alive.
+- Boss bar now shows the boss name **and phase pips**; bosses render their own
+  procedural body (`bdef.draw`). Enemy-bullet pool capped at `MAX_EPROJ` (1200,
+  drop-oldest) so bullet-hell stays smooth; explosion shake is damped during
+  dense boss phases for readability.
+
+### Six bosses (intro + 5)
+OVERLORD (radial/double rings, summons, phase-2 spiral), PRISM (sweeping
+refraction beams, homing spectrum fans, phase-3 mirror clones), THE HIVE
+(drone swarms, telegraphed hex walls, hatching eggs), GLITCH (stutter-teleport,
+pixel-sort band, screen-tear wave, ERROR rain, brief telegraphed input hiccup),
+THE CONDUCTOR (beat-synced bullets, equalizer walls, telegraphed bass-drop nova,
+phase-3 arpeggio), THE WARDEN (continuous gravity pull, spiral bullets,
+implosion→explosion, phase-2 mini-singularities). Every dangerous attack is
+telegraphed ~0.6–1.2s ahead via `G.telegraphs`.
+
+### Temporary buffs + boss-exclusive drops
+New central buff system (`player.buffT`) with HUD icons + time bars, never
+dropped by normal enemies:
+- Prism Shard (`prism`) — every projectile triple-fires (central hook in
+  `firePlayerProjectile`).
+- Queen's Nectar (`nectar`) — magnetizes on-screen gems + 2× XP.
+- Singularity Fragment (`singularity`) — magnetize all + a damaging aura.
+- Clean Save (`cleansave`) — full heal + ~2.5s invuln.
+- Tempo Core (`tempo`) — permanent +8% attack speed (stacks).
+Each boss drops its exclusive pickup plus a heal.
+
+Verified: zero console errors; 60fps under bullet-hell; eProj/particle caps hold;
+boss order/tier-wrap/drops/suppress all correct; phases trigger; every buff
+applies, displays, and expires.
+
 ## v1.4 — 2026-06-09 — Enemy fidelity pass
 
 Aligned five v1.3 enemies with their original design briefs (behaviour + stats):
