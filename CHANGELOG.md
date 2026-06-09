@@ -4,6 +4,41 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v1.2 — 2026-06-08 — Nine new weapons
+
+### New weapons
+Doubled-plus the arsenal — nine self-contained weapons join the level-up pool,
+each scaling with the existing passive multipliers (`S()`):
+- **Razor Disc** (`glaive`, 🔁) — spinning discs that fly out then home back,
+  hitting on both passes (hit-set clears on return). Max 9.
+- **Plasma Mines** (`mines`, ◇) — proximity/fuse mines that detonate in an AoE;
+  capped simultaneous count, chain-friendly. Max 8.
+- **Singularity** (`vortex`, 🌀) — a slow orb that leaves a vortex zone pulling
+  and damaging enemies for a few seconds. Max 8.
+- **Flak Burst** (`flak`, ✸) — a shell that airbursts into a cone of shrapnel
+  bolts at mid-life. Max 8.
+- **Arc Whip** (`whip`, ➰) — a melee arc swipe in the aim direction with
+  knockback; later levels add a second swipe. Max 9.
+- **Sentry Drone** (`sentry`, ▣) — deployable auto-turrets that fire at the
+  nearest enemy then expire; capped count. Max 8.
+- **Thunderstorm** (`storm`, ☇) — lightning strikes around the player (biased
+  toward foes) with a small AoE and brief slow. Max 8.
+- **Prism Ray** (`prismbeam`, ✴) — a piercing beam that splits toward other
+  nearby enemies at its endpoint. Max 8.
+- **Pulsar** (`pulsar`, ❂) — orbiting orbs that emit rhythmic shockwaves which
+  damage and push. Max 7.
+
+### Engine
+- New projectile kinds (`glaive`, `vortex`, `flak`) extend both the body-pass
+  render and `updateProjectiles()` motion (out-and-return, vortex-on-expiry,
+  mid-life airburst).
+- Added dedicated `_wq` / `_wq2` spatial-query buffers so the new weapons'
+  nested `grid.query` calls never clobber the shared `_q`.
+- All per-weapon spawned objects (mines, drones, vortices, pulsar orbs) are
+  hard-capped; `MAX_ENEMIES` / `MAX_PARTICLES` remain respected.
+- `MAX_WEAPONS` raised 6 → 7 (a flagged balance lever) so the larger pool gives
+  more build variety; HUD loadout still lays out correctly.
+
 ## v1.1 — 2026-06-08 — Balance pass & deeper progression
 
 ### Economy & pickups

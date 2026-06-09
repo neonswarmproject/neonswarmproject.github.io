@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen). Bump the minor by 0.1 for each completed prompt.
-const VERSION = '1.1';
+const VERSION = '1.2';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -145,6 +145,7 @@ const grid = {
   }
 };
 const _q = []; // reusable query buffer
+const _wq = [], _wq2 = []; // dedicated buffers for the new weapons (never clobber _q)
 
 /* ===========================================================================
    4. GAME STATE
@@ -633,6 +634,396 @@ const WEAPONS = {
       }
     }
   },
+
+  /* ======================================================================
+     v1.2 — nine additional weapons (see CHANGELOG). Each owns its self.t
+     cooldown and uses S() multipliers. Nested grid.query calls use the
+     dedicated _wq / _wq2 buffers so the shared _q is never clobbered.
+     ====================================================================== */
+
+  /* ---- Razor Disc : boomerang discs that hit out and back ---- */
+  glaive: {
+    name: 'Razor Disc', icon: '🔁', color: GR, max: 9,
+    info(l) {
+      const m = ['Hurls a spinning disc that flies out and returns.',
+        '+45% damage.', '+1 disc.', 'Bigger disc &amp; pierce.',
+        '+45% damage.', '+1 disc.', 'Bigger disc &amp; pierce.',
+        'Faster return &amp; damage.', 'Triple discs of doom.'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      self.t = (self.t || 0) - dt;
+      const cd = (1.3 - (lv >= 4 ? 0.3 : 0) - (lv >= 8 ? 0.2 : 0)) / S().attackSpeedMul;
+      if (self.t > 0) return;
+      self.t = cd;
+      const count = 1 + (lv >= 3 ? 1 : 0) + (lv >= 6 ? 1 : 0) + (lv >= 9 ? 1 : 0);
+      const dmg = 14 * (1 + (lv >= 2 ? 0.45 : 0) + (lv >= 5 ? 0.45 : 0) + (lv >= 8 ? 0.5 : 0)) * S().damageMul;
+      const pr = 4 + (lv >= 4 ? 2 : 0) + (lv >= 7 ? 3 : 0);
+      const rr = (10 + (lv >= 4 ? 3 : 0) + (lv >= 7 ? 4 : 0)) * Math.sqrt(S().areaMul);
+      const reach = (320 + (lv >= 6 ? 120 : 0)) * S().areaMul;
+      const spd = 470 * S().projSpeedMul;
+      const base = nearestEnemy(player.x, player.y, 1400);
+      const baseA = base ? angTo(player.x, player.y, base.x, base.y) : player.aim;
+      for (let i = 0; i < count; i++) {
+        const a = baseA + (i - (count - 1) / 2) * 0.4;
+        firePlayerProjectile({
+          x: player.x, y: player.y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
+          r: rr, dmg, pierce: pr, life: 3.0 * S().projDurMul, color: GR, kind: 'glaive',
+          hit: new Set(), spin: rand(0, TAU), returning: false, reach,
+          homing: 7 + (lv >= 8 ? 3 : 0), ox: player.x, oy: player.y
+        });
+      }
+      sfx('shoot');
+    }
+  },
+
+  /* ---- Plasma Mines : proximity mines with optional chaining ---- */
+  mines: {
+    name: 'Plasma Mines', icon: '◇', color: OR, max: 8,
+    info(l) {
+      const m = ['Drops proximity mines that blast on contact.',
+        '+40% damage.', '+2 mines.', 'Bigger blast.',
+        '+45% damage.', 'Chain detonations &amp; +mines.', 'Bigger blast.',
+        'Minefield: +mines &amp; damage.'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      if (!self.data) self.data = { mines: [], t: 0 };
+      const d = self.data;
+      const MINE_TRIGGER = 30, MINE_FUSE = 9, MINE_ARM = 0.3;
+      const maxMines = 4 + (lv >= 3 ? 2 : 0) + (lv >= 6 ? 3 : 0) + (lv >= 8 ? 3 : 0);
+      const blast = (78 + (lv >= 4 ? 28 : 0) + (lv >= 7 ? 36 : 0)) * S().areaMul;
+      const dmg = 30 * (1 + (lv >= 2 ? 0.4 : 0) + (lv >= 5 ? 0.45 : 0) + (lv >= 8 ? 0.5 : 0)) * S().damageMul;
+      const chain = lv >= 6;
+      d.t -= dt;
+      const cd = (1.1 - (lv >= 4 ? 0.25 : 0)) / S().attackSpeedMul;
+      if (d.t <= 0 && d.mines.length < maxMines) { d.t = cd; d.mines.push({ x: player.x, y: player.y, t: 0, deton: false }); }
+      for (const mn of d.mines) {
+        mn.t += dt;
+        if (mn.deton) continue;
+        if (mn.t >= MINE_FUSE) { mn.deton = true; continue; }
+        if (mn.t < MINE_ARM) continue;
+        grid.query(mn.x, mn.y, MINE_TRIGGER, _wq);
+        for (let j = 0; j < _wq.length; j++) { const e = _wq[j]; if (e.dead) continue; if (dist2(mn.x, mn.y, e.x, e.y) < (MINE_TRIGGER + e.r) ** 2) { mn.deton = true; break; } }
+      }
+      for (let i = d.mines.length - 1; i >= 0; i--) {
+        const mn = d.mines[i];
+        if (!mn.deton) continue;
+        explodeAt(mn.x, mn.y, blast, OR);
+        grid.query(mn.x, mn.y, blast, _wq2);
+        for (let j = 0; j < _wq2.length; j++) { const e = _wq2[j]; if (e.dead) continue; if (dist2(mn.x, mn.y, e.x, e.y) < (blast + e.r) ** 2) damageEnemy(e, dmg, { kbx: e.x - mn.x, kby: e.y - mn.y, kb: 120, color: OR }); }
+        if (chain) for (const o of d.mines) { if (o !== mn && !o.deton && dist2(mn.x, mn.y, o.x, o.y) < (blast * 0.9) ** 2) o.deton = true; }
+        d.mines.splice(i, 1);
+      }
+    },
+    draw(self) {
+      if (!self.data) return;
+      for (const mn of self.data.mines) {
+        const pulse = 0.5 + 0.5 * Math.sin(G.time * 8 + mn.x * 0.1);
+        glow(mn.x, mn.y, 9 + pulse * 4, OR, 0.5);
+        ctx.strokeStyle = rgba(OR, 0.85); ctx.lineWidth = 2;
+        poly(mn.x, mn.y, 7, 4, Math.PI / 4); ctx.stroke();
+      }
+    }
+  },
+
+  /* ---- Singularity : orb that collapses into a pulling well ---- */
+  vortex: {
+    name: 'Singularity', icon: '🌀', color: PU, max: 8,
+    info(l) {
+      const m = ['Fires an orb that collapses into a pulling well.',
+        'Longer well.', 'Bigger well.', '+damage.',
+        '+1 simultaneous well.', 'Stronger pull &amp; well.', '+damage.',
+        'Event horizon: +well &amp; pull.'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      if (!self.data) self.data = { zones: [] };
+      const z = self.data.zones;
+      for (let i = z.length - 1; i >= 0; i--) {
+        const v = z[i]; v.life -= dt;
+        if (v.life <= 0) { z.splice(i, 1); continue; }
+        grid.query(v.x, v.y, v.radius, _wq);
+        for (let j = 0; j < _wq.length; j++) {
+          const e = _wq[j]; if (e.dead || e.boss) continue;
+          if (dist2(v.x, v.y, e.x, e.y) < v.radius * v.radius) {
+            const a = angTo(e.x, e.y, v.x, v.y), f = v.pull * dt;
+            e.vx += Math.cos(a) * f; e.vy += Math.sin(a) * f;
+            e.x += Math.cos(a) * f * 0.02; e.y += Math.sin(a) * f * 0.02;
+          }
+        }
+        v.tick -= dt;
+        if (v.tick <= 0) {
+          v.tick = 0.25;
+          grid.query(v.x, v.y, v.radius, _wq);
+          for (let j = 0; j < _wq.length; j++) { const e = _wq[j]; if (e.dead) continue; if (dist2(v.x, v.y, e.x, e.y) < (v.radius + e.r) ** 2) damageEnemy(e, v.dmg * 0.25, { color: PU, silent: true }); }
+        }
+      }
+      self.t = (self.t || 0) - dt;
+      const cd = (3.2 - (lv >= 4 ? 0.6 : 0)) / S().attackSpeedMul;
+      if (self.t > 0) return;
+      self.t = cd;
+      const target = nearestEnemy(player.x, player.y, 1100);
+      const a = target ? angTo(player.x, player.y, target.x, target.y) : player.aim;
+      const spd = 185 * S().projSpeedMul;
+      firePlayerProjectile({
+        x: player.x, y: player.y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
+        r: 10, dmg: 0, pierce: 0, life: 1.5 * S().projDurMul, color: PU, kind: 'vortex',
+        _w: self, maxZones: 1 + (lv >= 5 ? 1 : 0) + (lv >= 8 ? 1 : 0),
+        zoneR: (120 + (lv >= 3 ? 40 : 0) + (lv >= 7 ? 60 : 0)) * S().areaMul,
+        zoneDur: 3.0 + (lv >= 2 ? 1.0 : 0) + (lv >= 6 ? 1.5 : 0),
+        zoneDmg: (20 + (lv >= 4 ? 14 : 0)) * S().damageMul,
+        zonePull: 220 + (lv >= 6 ? 130 : 0)
+      });
+      sfx('laser');
+    },
+    draw(self) {
+      if (!self.data) return;
+      for (const v of self.data.zones) {
+        const a = clamp(v.life / v.max, 0, 1);
+        glow(v.x, v.y, v.radius * 0.5, PU, 0.10 * a + 0.04);
+        ctx.strokeStyle = rgba(PU, 0.3 * a); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(v.x, v.y, v.radius, 0, TAU); ctx.stroke();
+        const rot = G.time * 3;
+        for (let k = 0; k < 6; k++) { const ang = rot + k / 6 * TAU, r2 = v.radius * (0.35 + 0.3 * Math.sin(G.time * 4 + k)); glow(v.x + Math.cos(ang) * r2, v.y + Math.sin(ang) * r2, 5, PU, 0.5 * a); }
+      }
+    }
+  },
+
+  /* ---- Flak Burst : shell that airbursts into shrapnel ---- */
+  flak: {
+    name: 'Flak Burst', icon: '✸', color: YE, max: 8,
+    info(l) {
+      const m = ['Lobs a shell that airbursts into shrapnel.',
+        '+2 shrapnel.', '+40% damage.', 'Wider spread.',
+        '+3 shrapnel.', '+45% damage.', 'Wider spread.',
+        'Flak storm: +4 shrapnel.'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      self.t = (self.t || 0) - dt;
+      const cd = (1.6 - (lv >= 4 ? 0.4 : 0)) / S().attackSpeedMul;
+      if (self.t > 0) return;
+      self.t = cd;
+      const target = nearestEnemy(player.x, player.y, 1000);
+      const a = target ? angTo(player.x, player.y, target.x, target.y) : player.aim;
+      const spd = 430 * S().projSpeedMul;
+      const shr = 5 + (lv >= 2 ? 2 : 0) + (lv >= 5 ? 3 : 0) + (lv >= 8 ? 4 : 0);
+      const dmg = 9 * (1 + (lv >= 3 ? 0.4 : 0) + (lv >= 6 ? 0.45 : 0)) * S().damageMul;
+      const spread = 0.6 + (lv >= 4 ? 0.3 : 0) + (lv >= 7 ? 0.5 : 0);
+      const life0 = 0.55 * S().projDurMul;
+      firePlayerProjectile({ x: player.x, y: player.y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, r: 6, dmg: 0, pierce: 0, life: life0, life0, color: YE, kind: 'flak', shr, shrDmg: dmg, shrSpread: spread, aimA: a, burst: false });
+      sfx('laser');
+    }
+  },
+
+  /* ---- Arc Whip : melee arc swipe in the aim direction ---- */
+  whip: {
+    name: 'Arc Whip', icon: '➰', color: MA, max: 9,
+    info(l) {
+      const m = ['Lashes a melee arc in your facing direction.',
+        '+damage.', 'Wider arc.', '+range.',
+        '+damage.', 'Faster &amp; wider.', '+range.',
+        '+damage.', 'Double swipe (front &amp; back).'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      self.t = (self.t || 0) - dt;
+      const cd = (0.9 - (lv >= 5 ? 0.25 : 0)) / S().attackSpeedMul;
+      if (self.t > 0) return;
+      self.t = cd;
+      const range = (150 + (lv >= 4 ? 40 : 0) + (lv >= 7 ? 50 : 0)) * Math.sqrt(S().areaMul);
+      const half = 0.7 + (lv >= 3 ? 0.25 : 0) + (lv >= 6 ? 0.3 : 0);
+      const dmg = (20 + (lv >= 2 ? 8 : 0) + (lv >= 5 ? 8 : 0) + (lv >= 8 ? 12 : 0)) * S().damageMul;
+      const swipes = 1 + (lv >= 9 ? 1 : 0);
+      for (let s = 0; s < swipes; s++) {
+        const aim = player.aim + s * Math.PI;
+        grid.query(player.x, player.y, range + 40, _wq);
+        for (let j = 0; j < _wq.length; j++) {
+          const e = _wq[j]; if (e.dead) continue;
+          if (dist2(player.x, player.y, e.x, e.y) < (range + e.r) ** 2) {
+            let da = angTo(player.x, player.y, e.x, e.y) - aim;
+            while (da > Math.PI) da -= TAU; while (da < -Math.PI) da += TAU;
+            if (Math.abs(da) <= half) damageEnemy(e, dmg, { kbx: e.x - player.x, kby: e.y - player.y, kb: 200, color: MA });
+          }
+        }
+        const segs = 10;
+        for (let k = 0; k <= segs; k++) {
+          const aa = aim - half + (k / segs) * half * 2, r2 = range * 0.92;
+          spawnParticle(player.x + Math.cos(aa) * r2, player.y + Math.sin(aa) * r2, Math.cos(aa) * 70, Math.sin(aa) * 70, 0.22, 3, MA, 'spark');
+        }
+      }
+      sfx('shoot');
+    }
+  },
+
+  /* ---- Sentry Drone : stationary auto-firing drones ---- */
+  sentry: {
+    name: 'Sentry Drone', icon: '▣', color: CY, max: 8,
+    info(l) {
+      const m = ['Deploys a drone that auto-fires, then expires.',
+        '+damage.', '+1 drone.', 'Longer lifetime.',
+        '+damage &amp; pierce.', '+1 drone.', 'Faster fire.',
+        'Drone swarm: +1 drone.'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      if (!self.data) self.data = { drones: [], t: 0 };
+      const d = self.data;
+      const maxD = 1 + (lv >= 3 ? 1 : 0) + (lv >= 6 ? 1 : 0) + (lv >= 8 ? 1 : 0);
+      const lifeT = 6 + (lv >= 4 ? 3 : 0);
+      const fireCd = (0.5 - (lv >= 7 ? 0.15 : 0)) / S().attackSpeedMul;
+      const dmg = (10 + (lv >= 2 ? 4 : 0) + (lv >= 5 ? 6 : 0)) * S().damageMul;
+      const pr = lv >= 5 ? 1 : 0;
+      for (let i = d.drones.length - 1; i >= 0; i--) {
+        const dr = d.drones[i]; dr.t -= dt;
+        if (dr.t <= 0) { d.drones.splice(i, 1); continue; }
+        dr.fireT -= dt;
+        if (dr.fireT <= 0) {
+          const tgt = nearestEnemy(dr.x, dr.y, 520);
+          if (tgt) {
+            dr.fireT = fireCd;
+            const a = angTo(dr.x, dr.y, tgt.x, tgt.y), spd = 600 * S().projSpeedMul;
+            firePlayerProjectile({ x: dr.x, y: dr.y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, r: 5, dmg, pierce: pr, life: 1.1 * S().projDurMul, color: CY, hit: new Set(), trail: 1 });
+            if (Math.random() < 0.25) sfx('shoot');
+          } else dr.fireT = 0.2;
+        }
+      }
+      d.t -= dt;
+      const cd = 2.2 / S().attackSpeedMul;
+      if (d.t <= 0 && d.drones.length < maxD) {
+        d.t = cd;
+        const a = rand(0, TAU), rr = rand(30, 70);
+        d.drones.push({ x: player.x + Math.cos(a) * rr, y: player.y + Math.sin(a) * rr, t: lifeT, fireT: rand(0, 0.3) });
+      }
+    },
+    draw(self) {
+      if (!self.data) return;
+      for (const dr of self.data.drones) {
+        glow(dr.x, dr.y, 12, CY, 0.7);
+        ctx.strokeStyle = rgba(CY, 0.9); ctx.lineWidth = 2;
+        poly(dr.x, dr.y, 7, 4, Math.PI / 4 + G.time * 0.5); ctx.stroke();
+      }
+    }
+  },
+
+  /* ---- Thunderstorm : random lightning strikes ---- */
+  storm: {
+    name: 'Thunderstorm', icon: '☇', color: BL, max: 8,
+    info(l) {
+      const m = ['Calls lightning strikes around you.',
+        '+1 strike.', '+damage.', 'Faster storm.',
+        '+2 strikes.', '+damage &amp; AoE.', 'Faster storm.',
+        'Maelstrom: +2 strikes.'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      self.t = (self.t || 0) - dt;
+      const cd = (1.5 - (lv >= 4 ? 0.4 : 0) - (lv >= 8 ? 0.3 : 0)) / S().attackSpeedMul;
+      if (self.t > 0) return;
+      self.t = cd;
+      const strikes = 1 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 2 : 0) + (lv >= 8 ? 2 : 0);
+      const dmg = (26 + (lv >= 3 ? 12 : 0) + (lv >= 6 ? 16 : 0)) * S().damageMul;
+      const aoe = (70 + (lv >= 6 ? 40 : 0)) * S().areaMul;
+      const reach = Math.hypot(W, H) / 2;
+      const near = (Math.random() < 0.75) ? nearestEnemies(player.x, player.y, 10) : null;
+      for (let s = 0; s < strikes; s++) {
+        let tx, ty;
+        const e = near && near.length ? pick(near) : null;
+        if (e) { tx = e.x + rand(-30, 30); ty = e.y + rand(-30, 30); }
+        else { const a = rand(0, TAU), r2 = rand(60, reach); tx = player.x + Math.cos(a) * r2; ty = player.y + Math.sin(a) * r2; }
+        grid.query(tx, ty, aoe, _wq);
+        for (let j = 0; j < _wq.length; j++) { const en = _wq[j]; if (en.dead) continue; if (dist2(tx, ty, en.x, en.y) < (aoe + en.r) ** 2) { damageEnemy(en, dmg, { color: BL }); en.vx *= 0.5; en.vy *= 0.5; } }
+        G.arcs.push({ pts: [{ x: tx, y: ty - Math.min(H, 520) }, { x: tx, y: ty }], life: 0.2, max: 0.2, color: BL });
+        G.particles.push({ x: tx, y: ty, vx: 0, vy: 0, r: 6, mr: aoe, life: 0.3, max: 0.3, color: BL, kind: 'ring' });
+      }
+      sfx('zap');
+    }
+  },
+
+  /* ---- Prism Ray : beam that splits toward other foes ---- */
+  prismbeam: {
+    name: 'Prism Ray', icon: '✴', color: CY, max: 8,
+    info(l) {
+      const m = ['A beam that splits toward other foes.',
+        'Wider beam.', '+damage.', 'Faster firing.',
+        '+1 split beam.', 'Wider beam.', '+range.',
+        'Refraction: +damage.'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      self.t = (self.t || 0) - dt;
+      const cd = (1.3 - (lv >= 4 ? 0.35 : 0) - (lv >= 8 ? 0.2 : 0)) / S().attackSpeedMul;
+      if (self.t > 0) return;
+      const first = nearestEnemy(player.x, player.y, 1100);
+      if (!first) { self.t = 0.2; return; }
+      self.t = cd;
+      const len = (560 + (lv >= 7 ? 180 : 0)) * S().areaMul;
+      const wid = (12 + (lv >= 2 ? 5 : 0) + (lv >= 6 ? 6 : 0)) * Math.sqrt(S().areaMul);
+      const dmg = (24 + (lv >= 3 ? 12 : 0) + (lv >= 8 ? 16 : 0)) * S().damageMul;
+      const subN = 2 + (lv >= 5 ? 1 : 0);
+      const hitBeam = (x1, y1, x2, y2, w, dm) => {
+        grid.query((x1 + x2) / 2, (y1 + y2) / 2, dist(x1, y1, x2, y2) / 2 + 60, _wq);
+        for (let j = 0; j < _wq.length; j++) { const e = _wq[j]; if (e.dead) continue; if (segDist(x1, y1, x2, y2, e.x, e.y) < w / 2 + e.r) damageEnemy(e, dm, { color: CY }); }
+        G.beams.push({ x1, y1, x2, y2, w, life: 0.16, max: 0.16, color: CY });
+      };
+      const a0 = angTo(player.x, player.y, first.x, first.y);
+      hitBeam(player.x, player.y, player.x + Math.cos(a0) * len, player.y + Math.sin(a0) * len, wid, dmg);
+      const others = nearestEnemies(first.x, first.y, subN + 1).filter(e => e !== first).slice(0, subN);
+      for (const t of others) {
+        const a = angTo(first.x, first.y, t.x, t.y);
+        hitBeam(first.x, first.y, first.x + Math.cos(a) * len * 0.7, first.y + Math.sin(a) * len * 0.7, wid * 0.8, dmg * 0.7);
+      }
+      G.shake = Math.min(1, G.shake + 0.05);
+      sfx('laser');
+    }
+  },
+
+  /* ---- Pulsar : orbiting orb that emits shockwaves ---- */
+  pulsar: {
+    name: 'Pulsar', icon: '❂', color: MA, max: 7,
+    info(l) {
+      const m = ['An orb orbits you, pulsing shockwaves.',
+        '+damage.', 'Bigger waves.', '+1 orb.',
+        'Faster pulses.', 'Bigger waves &amp; damage.', 'Quasar: +1 orb.'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      if (!self.data) self.data = { ang: 0, t: 0, positions: [] };
+      const d = self.data;
+      const orbs = 1 + (lv >= 4 ? 1 : 0) + (lv >= 7 ? 1 : 0);
+      const orbitR = 62 * Math.sqrt(S().areaMul);
+      d.ang += dt * 1.6;
+      d.positions = [];
+      for (let i = 0; i < orbs; i++) { const a = d.ang + i / orbs * TAU; d.positions.push({ x: player.x + Math.cos(a) * orbitR, y: player.y + Math.sin(a) * orbitR }); }
+      d.t -= dt;
+      const cd = (1.8 - (lv >= 5 ? 0.5 : 0)) / S().attackSpeedMul;
+      const waveR = (120 + (lv >= 3 ? 50 : 0) + (lv >= 6 ? 70 : 0)) * S().areaMul;
+      const dmg = (22 + (lv >= 2 ? 10 : 0) + (lv >= 6 ? 16 : 0)) * S().damageMul;
+      if (d.t <= 0) {
+        d.t = cd;
+        for (const p of d.positions) {
+          G.particles.push({ x: p.x, y: p.y, vx: 0, vy: 0, r: 8, mr: waveR, life: 0.5, max: 0.5, color: MA, kind: 'ring' });
+          grid.query(p.x, p.y, waveR, _wq);
+          for (let j = 0; j < _wq.length; j++) { const e = _wq[j]; if (e.dead) continue; if (dist2(p.x, p.y, e.x, e.y) < (waveR + e.r) ** 2) damageEnemy(e, dmg, { kbx: e.x - p.x, kby: e.y - p.y, kb: 160, color: MA }); }
+        }
+        sfx('nova');
+      }
+    },
+    draw(self) {
+      if (!self.data || !self.data.positions) return;
+      for (const p of self.data.positions) glow(p.x, p.y, 14, MA, 0.85);
+    }
+  },
 };
 function segDist(x1, y1, x2, y2, px, py) {
   const dx = x2 - x1, dy = y2 - y1;
@@ -642,7 +1033,9 @@ function segDist(x1, y1, x2, y2, px, py) {
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
 const WEAPON_IDS = Object.keys(WEAPONS);
-const MAX_WEAPONS = 6;
+// Balance lever: max simultaneous weapons a run can hold. Raised 6 -> 7 so the
+// larger weapon pool gives more build variety.
+const MAX_WEAPONS = 7;
 
 function addWeapon(id) { player.weapons.push({ id, level: 1, t: 0, data: null }); }
 function hasWeapon(id) { return player.weapons.some(w => w.id === id); }
@@ -1182,7 +1575,15 @@ function updateProjectiles(dt) {
   for (let i = arr.length - 1; i >= 0; i--) {
     const p = arr[i];
     p.life -= dt;
-    if (p.life <= 0) { arr.splice(i, 1); continue; }
+    if (p.life <= 0) {
+      // a Singularity orb collapses into a pulling well where it expires
+      if (p.kind === 'vortex' && p._w) {
+        const zs = p._w.data.zones;
+        if (zs.length >= p.maxZones) zs.shift();
+        zs.push({ x: p.x, y: p.y, radius: p.zoneR, life: p.zoneDur, max: p.zoneDur, dmg: p.zoneDmg, pull: p.zonePull, tick: 0 });
+      }
+      arr.splice(i, 1); continue;
+    }
 
     if (p.kind === 'missile') {
       if (!p.target || p.target.dead) p.target = nearestEnemy(p.x, p.y, 600);
@@ -1196,25 +1597,58 @@ function updateProjectiles(dt) {
       }
     }
 
+    if (p.kind === 'glaive') {
+      // fly out to its reach, then home back to the player; re-hits on the way back
+      p.spin = (p.spin || 0) + dt * 22;
+      if (!p.returning) {
+        if (dist2(p.x, p.y, p.ox, p.oy) > p.reach * p.reach) { p.returning = true; if (p.hit) p.hit.clear(); }
+      } else {
+        const a = angTo(p.x, p.y, player.x, player.y);
+        const ca = Math.atan2(p.vy, p.vx);
+        let da = a - ca; while (da > Math.PI) da -= TAU; while (da < -Math.PI) da += TAU;
+        const na = ca + clamp(da, -p.homing * dt, p.homing * dt);
+        const sp = Math.hypot(p.vx, p.vy);
+        p.vx = Math.cos(na) * sp; p.vy = Math.sin(na) * sp;
+        if (dist2(p.x, p.y, player.x, player.y) < (player.r + p.r) ** 2) p.life = 0;
+      }
+    } else if (p.kind === 'flak') {
+      // airburst at mid-life into a cone of shrapnel bolts
+      if (!p.burst && p.life <= p.life0 * 0.5) {
+        p.burst = true;
+        const n = p.shr, ss = 360 * S().projSpeedMul;
+        for (let k = 0; k < n; k++) {
+          const aa = p.aimA + (n > 1 ? (k - (n - 1) / 2) * (p.shrSpread / (n - 1)) : 0);
+          firePlayerProjectile({ x: p.x, y: p.y, vx: Math.cos(aa) * ss, vy: Math.sin(aa) * ss, r: 5, dmg: p.shrDmg, pierce: 0, life: 0.5 * S().projDurMul, color: YE, hit: new Set() });
+        }
+        p.life = 0; sfx('explode');
+      }
+    }
+
     p.x += p.vx * dt; p.y += p.vy * dt;
     if (p.trail && Math.random() < 0.6) spawnParticle(p.x, p.y, 0, 0, 0.18, p.r * 0.7, p.color, 'spark');
 
-    grid.query(p.x, p.y, p.r + 30, _q);
-    for (let j = 0; j < _q.length; j++) {
-      const e = _q[j];
-      if (e.dead) continue;
-      if (p.hit && p.hit.has(e.id)) continue;
-      if (dist2(p.x, p.y, e.x, e.y) < (p.r + e.r) ** 2) {
-        if (p.kind === 'missile') {
-          explodeAt(p.x, p.y, p.blast, OR);
-          grid.query(p.x, p.y, p.blast, _q);
-          for (let k = 0; k < _q.length; k++) { const e2 = _q[k]; if (!e2.dead && dist2(p.x, p.y, e2.x, e2.y) < (p.blast + e2.r) ** 2) damageEnemy(e2, p.dmg, { color: OR, kbx: e2.x - p.x, kby: e2.y - p.y, kb: 90 }); }
-          p.life = 0; break;
-        } else {
-          damageEnemy(e, p.dmg, { kbx: p.vx, kby: p.vy, kb: 60, color: p.color });
-          if (p.hit) p.hit.add(e.id);
-          if (p.pierce > 0) p.pierce--;
-          else { p.life = 0; break; }
+    // flak shells & vortex orbs deal no contact damage; their effect is on a timer
+    if (p.kind !== 'flak' && p.kind !== 'vortex') {
+      grid.query(p.x, p.y, p.r + 30, _q);
+      for (let j = 0; j < _q.length; j++) {
+        const e = _q[j];
+        if (e.dead) continue;
+        if (p.hit && p.hit.has(e.id)) continue;
+        if (dist2(p.x, p.y, e.x, e.y) < (p.r + e.r) ** 2) {
+          if (p.kind === 'missile') {
+            explodeAt(p.x, p.y, p.blast, OR);
+            grid.query(p.x, p.y, p.blast, _q);
+            for (let k = 0; k < _q.length; k++) { const e2 = _q[k]; if (!e2.dead && dist2(p.x, p.y, e2.x, e2.y) < (p.blast + e2.r) ** 2) damageEnemy(e2, p.dmg, { color: OR, kbx: e2.x - p.x, kby: e2.y - p.y, kb: 90 }); }
+            p.life = 0; break;
+          } else if (p.kind === 'glaive') {
+            damageEnemy(e, p.dmg, { kbx: p.vx, kby: p.vy, kb: 50, color: GR });
+            if (p.hit) p.hit.add(e.id);   // hit-set lets it re-hit after clearing on the return pass
+          } else {
+            damageEnemy(e, p.dmg, { kbx: p.vx, kby: p.vy, kb: 60, color: p.color });
+            if (p.hit) p.hit.add(e.id);
+            if (p.pierce > 0) p.pierce--;
+            else { p.life = 0; break; }
+          }
         }
       }
     }
@@ -1507,6 +1941,9 @@ function render() {
   for (const p of G.pProj) {
     ctx.fillStyle = WH;
     if (p.kind === 'missile') { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(Math.atan2(p.vy, p.vx)); ctx.fillStyle = OR; poly(0, 0, p.r + 2, 3, 0); ctx.fill(); ctx.restore(); }
+    else if (p.kind === 'glaive') { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.spin || 0); ctx.strokeStyle = GR; ctx.lineWidth = 2.5; poly(0, 0, p.r, 3, 0); ctx.stroke(); ctx.strokeStyle = WH; ctx.lineWidth = 1.2; poly(0, 0, p.r * 0.5, 3, Math.PI); ctx.stroke(); ctx.restore(); }
+    else if (p.kind === 'vortex') { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(G.time * 6); ctx.strokeStyle = PU; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, p.r * 0.6, 0, Math.PI * 1.5); ctx.stroke(); ctx.restore(); }
+    else if (p.kind === 'flak') { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(G.time * 8); ctx.fillStyle = YE; star(0, 0, p.r, 4, 0, 0.5); ctx.fill(); ctx.restore(); }
     else { ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.55, 0, TAU); ctx.fill(); }
   }
   // player ship
