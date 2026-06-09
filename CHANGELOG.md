@@ -4,6 +4,45 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v1.3 — 2026-06-08 — Twelve new enemies & a telegraph system
+
+### Telegraph system
+- New `G.telegraphs` list + `addTelegraph()` helper. Fading warning shapes are
+  drawn in the additive pass ~0.6–1.0s before a hit lands: `line` for aimed
+  shots / charges, `zone` for AoE. They pulse and intensify as the hit nears.
+
+### Behaviour refactor
+- `updateEnemies()` per-type logic moved into a clean `EBEHAVIOR[type]` registry
+  (each entry may define `move(e,c,dt)` and/or `contact(e,c)`; no entry = default
+  chase + contact; bosses dispatch by the `e.boss` flag). Existing enemies
+  (grunt/rusher/orbiter/splitter/shooter/tank/bomber/mini + OVERLORD bosses)
+  behave **identically** — the original orbiter spiral, shooter strafe/fire,
+  bomber detonation, and boss barrage/summon were ported verbatim.
+
+### Twelve new enemies (time-gated in `pickEnemyType`)
+- **Weaver** (CY) — serpentine rusher. ~0.5 min.
+- **Shielder** (BL) — frontal shield soaks ~80% of frontal projectile damage. ~1.5 min.
+- **Charger** (OR) — telegraphs a line, then dashes along it. ~1.5 min.
+- **Mender** (GR) — hangs back and periodically heals wounded allies. ~2 min.
+- **Hatcher** (GR) — periodically releases a brood of minis (and on death). ~2 min.
+- **Lancer** (PU) — telegraphs then fires a fast aimed shot. ~2.5 min.
+- **Saw** (YE) — fast-spinning, high-contact buzzsaw. ~2.5 min.
+- **Phantom** (PU) — blinks near the player and is briefly intangible (phases
+  through projectiles, deals no contact damage while phased). ~3 min.
+- **Reflector** (CY) — ~30% chance to bounce a shot back as a hostile bolt. ~3 min.
+- **Detonator** (RD) — a staggered 3-ring AoE, each ring telegraphed. ~3.5 min.
+- **Disruptor** (MA) — emits a field that slows player movement while near. ~3.5 min.
+- **Juggernaut** (OR) — slow mini-boss with a telegraphed ground-slam and an
+  always-on health bar. ~4 min.
+
+### Engine
+- Player movement gains a per-frame `G.playerSlow` multiplier (disruptor fields).
+- Projectile collision now respects phantom intangibility, reflector bounces, and
+  tags player projectiles (`proj`) so the shielder block can read impact angle.
+- All new spawns route through `spawnEnemy` (so `MAX_ENEMIES` is respected); new
+  shapes reuse the existing `drawShapeFor` set. Verified: zero console errors,
+  steady 60fps at ~150 enemies, all 20 enemy types spawning.
+
 ## v1.2 — 2026-06-08 — Nine new weapons
 
 ### New weapons

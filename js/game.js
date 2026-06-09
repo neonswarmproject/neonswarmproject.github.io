@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen). Bump the minor by 0.1 for each completed prompt.
-const VERSION = '1.2';
+const VERSION = '1.3';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -162,7 +162,7 @@ const G = {
   flash: 0,                       // white/red screen flash 0..1
   flashColor: WH,
   enemies: [], eProj: [], pProj: [], gems: [], pickups: [],
-  particles: [], floaters: [], beams: [], arcs: [],
+  particles: [], floaters: [], beams: [], arcs: [], telegraphs: [],
   kills: 0, score: 0,
   combo: 0, comboTimer: 0,
   pendingLevels: 0,
@@ -172,6 +172,7 @@ const G = {
   bossNum: 0,
   boss: null,
   frost: null,                    // {radius, slow, dmg} computed each frame
+  playerSlow: 1,                  // 0..1 move multiplier from disruptor fields (reset each frame)
   best: loadBest(),
   choices: [],
   selIndex: 0,
@@ -1188,6 +1189,19 @@ const ETYPES = {
   tank:     { hp: 95, speed: 44,  r: 25, dmg: 16, xp: 5, color: OR, shape: 'hex' },
   bomber:   { hp: 26, speed: 124, r: 15, dmg: 20, xp: 3, color: RD, shape: 'spiky' },
   mini:     { hp: 8,  speed: 96,  r: 9,  dmg: 6,  xp: 1, color: GR, shape: 'square' },
+  // ---- v1.3 enemies (behaviour lives in EBEHAVIOR; shapes already in drawShapeFor) ----
+  weaver:     { hp: 15,  speed: 150, r: 11, dmg: 8,  xp: 2,  color: CY, shape: 'tri' },
+  shielder:   { hp: 70,  speed: 58,  r: 16, dmg: 12, xp: 4,  color: BL, shape: 'penta' },
+  mender:     { hp: 42,  speed: 72,  r: 14, dmg: 8,  xp: 4,  color: GR, shape: 'circle' },
+  charger:    { hp: 34,  speed: 70,  r: 14, dmg: 16, xp: 3,  color: OR, shape: 'tri' },
+  lancer:     { hp: 30,  speed: 60,  r: 13, dmg: 12, xp: 4,  color: PU, shape: 'penta' },
+  hatcher:    { hp: 52,  speed: 50,  r: 18, dmg: 10, xp: 4,  color: GR, shape: 'spiky' },
+  phantom:    { hp: 26,  speed: 112, r: 12, dmg: 12, xp: 4,  color: PU, shape: 'diamond' },
+  reflector:  { hp: 44,  speed: 64,  r: 14, dmg: 10, xp: 5,  color: CY, shape: 'hex' },
+  detonator:  { hp: 40,  speed: 80,  r: 14, dmg: 14, xp: 4,  color: RD, shape: 'spiky' },
+  disruptor:  { hp: 46,  speed: 56,  r: 15, dmg: 10, xp: 5,  color: MA, shape: 'circle' },
+  saw:        { hp: 38,  speed: 132, r: 15, dmg: 14, xp: 4,  color: YE, shape: 'spiky' },
+  juggernaut: { hp: 340, speed: 40,  r: 30, dmg: 22, xp: 18, color: OR, shape: 'hex' },
 };
 
 // Late-game difficulty curve. HP ramps hard past ~4 min (cubic term); speed is
@@ -1242,6 +1256,19 @@ function pickEnemyType(m) {
     ['shooter', m > 2 ? m * 0.9 : 0],
     ['tank', m > 2.5 ? m * 0.6 : 0],
     ['bomber', m > 3 ? m * 0.8 : 0],
+    // ---- v1.3 enemies, time-gated so they appear as the run escalates ----
+    ['weaver', m > 0.5 ? 3 + m * 1.2 : 0],
+    ['shielder', m > 1.5 ? m * 0.8 : 0],
+    ['charger', m > 1.5 ? m * 0.9 : 0],
+    ['mender', m > 2 ? m * 0.5 : 0],
+    ['hatcher', m > 2 ? m * 0.5 : 0],
+    ['lancer', m > 2.5 ? m * 0.7 : 0],
+    ['saw', m > 2.5 ? m * 0.7 : 0],
+    ['phantom', m > 3 ? m * 0.6 : 0],
+    ['reflector', m > 3 ? m * 0.6 : 0],
+    ['detonator', m > 3.5 ? m * 0.55 : 0],
+    ['disruptor', m > 3.5 ? m * 0.5 : 0],
+    ['juggernaut', m > 4 ? 0.6 + m * 0.15 : 0],
   ];
   let total = 0; for (const e of w) total += e[1];
   let r = rand(0, total);
@@ -1305,42 +1332,63 @@ function spawnBoss() {
 }
 function romanize(n) { return ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'][n - 1] || ('#' + n); }
 
-function updateEnemies(dt) {
-  const arr = G.enemies;
-  for (let i = arr.length - 1; i >= 0; i--) {
-    const e = arr[i];
-    if (e.dead) { arr.splice(i, 1); if (e === G.boss) G.boss = null; continue; }
-    e.flash = Math.max(0, e.flash - dt * 6);
-    e.rot += dt * (e.type === 'orbiter' ? 4 : 1);
+/* ---- Telegraphs: fading warning shapes drawn ~0.6-1.0s before a hit lands.
+   kind 'line' (aimed shots / charges) or 'zone' (AoE circles). ---- */
+function addTelegraph(o) {
+  o.life = o.dur; o.max = o.dur;
+  if (!o.color) o.color = RD;
+  G.telegraphs.push(o);
+}
 
-    // frost slow
-    e.slow = 1;
-    if (G.frost && dist2(player.x, player.y, e.x, e.y) < (G.frost.radius + e.r) ** 2)
-      e.slow = 1 - G.frost.slow;
+// ---- v1.3 enemy tuning. Every magic number lives here so behaviour is easy to retune. ----
+const WEAVER_FREQ = 7, WEAVER_AMP = 0.9;
+const SHIELDER_ARC = 1.05, SHIELDER_BLOCK = 0.8;          // half-arc (~60deg) and damage soaked
+const MENDER_CD = 2.2, MENDER_RANGE = 150, MENDER_HEAL = 14, MENDER_KEEP = 220;
+const CHARGER_WIND = 0.7, CHARGER_DASH = 0.45, CHARGER_DASHMUL = 4.0, CHARGER_RANGE = 360, CHARGER_CD = [2.2, 3.6];
+const LANCER_WIND = 0.65, LANCER_CD = [2.0, 3.2], LANCER_SHOT = 460, LANCER_KEEP = 240, LANCER_RANGE = 700;
+const HATCHER_CD = 3.0, HATCHER_BROOD = 2;
+const PHANTOM_CD = [2.4, 3.8], PHANTOM_PHASE = 0.35, PHANTOM_TP = 240;
+const REFLECTOR_CHANCE = 0.3, REFLECTOR_SHOT = 300;
+const DETO_WIND = 0.8, DETO_STAGGER = 0.45, DETO_R0 = 80, DETO_RSTEP = 46, DETO_CD = [4, 7];
+const DISRUPTOR_RANGE = 200, DISRUPTOR_SLOW = 0.55;
+const JUG_WIND = 0.9, JUG_CD = [3.5, 5.5], JUG_SLAM_R = 150;
 
-    const ang = angTo(e.x, e.y, player.x, player.y);
-    const d = dist(e.x, e.y, player.x, player.y);
-    let ax = Math.cos(ang), ay = Math.sin(ang);
-    let sp = e.speed * e.slow;
-
-    // behaviours
-    if (e.type === 'orbiter') {
+/* Per-type behaviour registry. Each entry may define move(e,c,dt) (mutates the
+   movement context c = {ang,d,ax,ay,sp}, fires, telegraphs) and/or contact(e,c)
+   (custom on-touch). No entry => default chase + default contact. Bosses are
+   dispatched by the e.boss flag (their type is 'tank'), never by EBEHAVIOR.tank. */
+const EBEHAVIOR = {
+  orbiter: {
+    move(e, c) {
       // spiral: tangential + slight inward
-      const tx = -ay, ty = ax;
-      ax = ax * 0.5 + tx; ay = ay * 0.5 + ty;
-      const l = Math.hypot(ax, ay); ax /= l; ay /= l;
-    } else if (e.type === 'shooter') {
+      const tx = -c.ay, ty = c.ax;
+      c.ax = c.ax * 0.5 + tx; c.ay = c.ay * 0.5 + ty;
+      const l = Math.hypot(c.ax, c.ay); c.ax /= l; c.ay /= l;
+    },
+  },
+  shooter: {
+    move(e, c, dt) {
       const prefer = 300;
-      if (d < prefer - 40) { ax = -ax; ay = -ay; }
-      else if (d < prefer + 40) { ax = -ay; ay = ax; } // strafe
+      if (c.d < prefer - 40) { c.ax = -c.ax; c.ay = -c.ay; }
+      else if (c.d < prefer + 40) { c.ax = -c.ay; c.ay = c.ax; } // strafe
       e.fireT -= dt;
-      if (e.fireT <= 0 && d < 640) {
+      if (e.fireT <= 0 && c.d < 640) {
         e.fireT = 1.8 + rand(0, 0.6);
         const a = angTo(e.x, e.y, player.x, player.y);
         spawnEnemyProjectile(e.x, e.y, Math.cos(a) * 240, Math.sin(a) * 240, e.dmg * 0.7, PU);
       }
-    } else if (e.boss) {
-      sp = e.speed;
+    },
+  },
+  bomber: {
+    contact(e) {
+      explodeAt(e.x, e.y, 70 * S().areaMul, RD);
+      if (dist(e.x, e.y, player.x, player.y) < 70 + player.r) hurtPlayer(e.dmg);
+      killEnemy(e, false);
+    },
+  },
+  boss: {
+    move(e, c, dt) {
+      c.sp = e.speed;
       e.fireT -= dt; e.summonT -= dt;
       if (e.fireT <= 0) {
         e.fireT = 2.6;
@@ -1358,10 +1406,192 @@ function updateEnemies(dt) {
           spawnEnemy('rusher', e.x + Math.cos(a) * 70, e.y + Math.sin(a) * 70, null);
         }
       }
-    }
+    },
+  },
 
-    e.vx = lerp(e.vx, ax * sp, 0.12);
-    e.vy = lerp(e.vy, ay * sp, 0.12);
+  /* ---- v1.3 enemies ---- */
+  // Weaver: serpentine approach (perpendicular sine added to the chase vector).
+  weaver: {
+    move(e, c, dt) {
+      e.weaveT = (e.weaveT || 0) + dt;
+      const px = -c.ay, py = c.ax;
+      const s = Math.sin(e.weaveT * WEAVER_FREQ) * WEAVER_AMP;
+      c.ax += px * s; c.ay += py * s;
+      const l = Math.hypot(c.ax, c.ay) || 1; c.ax /= l; c.ay /= l;
+    },
+  },
+  // Shielder: chases head-on; its front shield (faces the player) soaks frontal
+  // projectile damage — applied in damageEnemy via e.shieldA.
+  shielder: { move(e, c) { e.shieldA = c.ang; } },
+  // Mender: hangs back and periodically heals wounded nearby allies.
+  mender: {
+    move(e, c, dt) {
+      if (c.d < MENDER_KEEP) { c.ax = -c.ax; c.ay = -c.ay; }
+      e.healT = (e.healT ?? rand(0, MENDER_CD)) - dt;
+      if (e.healT <= 0) {
+        e.healT = MENDER_CD;
+        grid.query(e.x, e.y, MENDER_RANGE, _wq);
+        let healed = false;
+        const amt = MENDER_HEAL * diffScale().hp;
+        for (let j = 0; j < _wq.length; j++) {
+          const o = _wq[j];
+          if (o.dead || o === e || o.boss) continue;
+          if (o.hp < o.maxHp) { o.hp = Math.min(o.maxHp, o.hp + amt); o.flash = Math.max(o.flash, 0.2); healed = true; }
+        }
+        if (healed) G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: 8, mr: MENDER_RANGE, life: 0.5, max: 0.5, color: GR, kind: 'ring' });
+      }
+    },
+  },
+  // Charger: telegraphs a line, then dashes along it.
+  charger: {
+    move(e, c, dt) {
+      if (e.state === 'dash') {
+        e.dashT -= dt;
+        c.ax = Math.cos(e.dashA); c.ay = Math.sin(e.dashA); c.sp = e.speed * CHARGER_DASHMUL;
+        if (e.dashT <= 0) { e.state = null; e.chT = rand(CHARGER_CD[0], CHARGER_CD[1]); }
+        return;
+      }
+      if (e.state === 'wind') {
+        c.sp *= 0.25; e.windT -= dt;
+        if (e.windT <= 0) { e.state = 'dash'; e.dashT = CHARGER_DASH; }
+        return;
+      }
+      e.chT = (e.chT ?? rand(CHARGER_CD[0], CHARGER_CD[1])) - dt;
+      if (e.chT <= 0 && c.d < CHARGER_RANGE) {
+        e.state = 'wind'; e.windT = CHARGER_WIND; e.dashA = c.ang; c.sp *= 0.25;
+        addTelegraph({ kind: 'line', x: e.x, y: e.y, a: e.dashA, len: CHARGER_RANGE, w: 14, dur: CHARGER_WIND, color: OR });
+      }
+    },
+  },
+  // Lancer: telegraphs an aimed line, then fires a fast precise shot.
+  lancer: {
+    move(e, c, dt) {
+      if (e.state === 'wind') {
+        c.sp *= 0.2; e.windT -= dt;
+        if (e.windT <= 0) {
+          e.state = null; e.fireT = rand(LANCER_CD[0], LANCER_CD[1]);
+          spawnEnemyProjectile(e.x, e.y, Math.cos(e.aimA) * LANCER_SHOT, Math.sin(e.aimA) * LANCER_SHOT, e.dmg * 0.9, PU);
+        }
+        return;
+      }
+      if (c.d < LANCER_KEEP) { c.ax = -c.ax; c.ay = -c.ay; }
+      e.fireT -= dt;
+      if (e.fireT <= 0 && c.d < LANCER_RANGE) {
+        e.state = 'wind'; e.windT = LANCER_WIND; e.aimA = c.ang;
+        addTelegraph({ kind: 'line', x: e.x, y: e.y, a: e.aimA, len: LANCER_RANGE, w: 7, dur: LANCER_WIND, color: PU });
+      }
+    },
+  },
+  // Hatcher: periodically releases a small brood of minis (also bursts on death).
+  hatcher: {
+    move(e, c, dt) {
+      e.hatchT = (e.hatchT ?? HATCHER_CD) - dt;
+      if (e.hatchT <= 0) {
+        e.hatchT = HATCHER_CD;
+        for (let k = 0; k < HATCHER_BROOD; k++) {
+          const a = rand(0, TAU);
+          spawnEnemy('mini', e.x + Math.cos(a) * (e.r + 6), e.y + Math.sin(a) * (e.r + 6), { vx: Math.cos(a) * 120, vy: Math.sin(a) * 120 });
+        }
+        G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: 6, mr: e.r + 30, life: 0.4, max: 0.4, color: GR, kind: 'ring' });
+      }
+    },
+  },
+  // Phantom: periodically blinks near the player and is briefly intangible.
+  phantom: {
+    move(e, c, dt) {
+      if (e.intangible > 0) e.intangible -= dt;
+      e.phaseT = (e.phaseT ?? rand(PHANTOM_CD[0], PHANTOM_CD[1])) - dt;
+      if (e.phaseT <= 0) {
+        e.phaseT = rand(PHANTOM_CD[0], PHANTOM_CD[1]);
+        e.intangible = PHANTOM_PHASE;
+        const a = rand(0, TAU), r = PHANTOM_TP + rand(-40, 60), lim = ARENA / 2 - e.r;
+        e.x = clamp(player.x + Math.cos(a) * r, -lim, lim);
+        e.y = clamp(player.y + Math.sin(a) * r, -lim, lim);
+        e.vx = 0; e.vy = 0;
+        spawnParticle(e.x, e.y, 0, 0, 0.4, e.r, PU, 'spark');
+      }
+    },
+    contact(e, c) { if (e.intangible > 0) return; hurtPlayer(e.dmg); e.vx -= c.ax * 60; e.vy -= c.ay * 60; },
+  },
+  // Detonator: a staggered 3-ring AoE, each ring telegraphed before it lands.
+  detonator: {
+    move(e, c, dt) {
+      if (e.detoPhase > 0) {
+        c.sp *= 0.25; e.detoT -= dt;
+        if (e.detoT <= 0) {
+          const ring = 4 - e.detoPhase;            // 1,2,3
+          const R = DETO_R0 + (ring - 1) * DETO_RSTEP;
+          explodeAt(e.x, e.y, R, RD);
+          if (dist(e.x, e.y, player.x, player.y) < R + player.r) hurtPlayer(e.dmg * 0.8);
+          e.detoPhase--;
+          if (e.detoPhase > 0) {
+            e.detoT = DETO_STAGGER;
+            addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: DETO_R0 + ring * DETO_RSTEP, dur: DETO_STAGGER, color: RD });
+          } else { e.detoCD = rand(DETO_CD[0], DETO_CD[1]); }
+        }
+        return;
+      }
+      e.detoCD = (e.detoCD ?? rand(DETO_CD[0], DETO_CD[1])) - dt;
+      if (e.detoCD <= 0 && c.d < 600) {
+        e.detoPhase = 3; e.detoT = DETO_WIND;
+        addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: DETO_R0, dur: DETO_WIND, color: RD });
+      }
+    },
+  },
+  // Disruptor: emits a field that slows the player while it's nearby.
+  disruptor: {
+    move(e, c) {
+      if (c.d < DISRUPTOR_RANGE) {
+        G.playerSlow = Math.min(G.playerSlow, DISRUPTOR_SLOW);
+        if (Math.random() < 0.3) spawnParticle(player.x + rand(-12, 12), player.y + rand(-12, 12), 0, 0, 0.3, 2, MA, 'spark');
+      }
+    },
+  },
+  // Juggernaut: slow mini-boss that telegraphs a heavy ground-slam AoE.
+  juggernaut: {
+    move(e, c, dt) {
+      if (e.slamPhase) {
+        c.sp *= 0.1; e.slamT -= dt;
+        if (e.slamT <= 0) {
+          e.slamPhase = false; e.jugCD = rand(JUG_CD[0], JUG_CD[1]);
+          explodeAt(e.x, e.y, JUG_SLAM_R, OR);
+          if (dist(e.x, e.y, player.x, player.y) < JUG_SLAM_R + player.r) hurtPlayer(e.dmg);
+          G.shake = Math.min(1, G.shake + 0.5);
+        }
+        return;
+      }
+      e.jugCD = (e.jugCD ?? rand(JUG_CD[0], JUG_CD[1])) - dt;
+      if (e.jugCD <= 0 && c.d < JUG_SLAM_R + 60) {
+        e.slamPhase = true; e.slamT = JUG_WIND;
+        addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: JUG_SLAM_R, dur: JUG_WIND, color: OR });
+      }
+    },
+  },
+};
+
+function updateEnemies(dt) {
+  const arr = G.enemies;
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const e = arr[i];
+    if (e.dead) { arr.splice(i, 1); if (e === G.boss) G.boss = null; continue; }
+    e.flash = Math.max(0, e.flash - dt * 6);
+    e.rot += dt * (e.type === 'orbiter' ? 4 : e.type === 'saw' ? 7 : 1);
+
+    // frost slow
+    e.slow = 1;
+    if (G.frost && dist2(player.x, player.y, e.x, e.y) < (G.frost.radius + e.r) ** 2)
+      e.slow = 1 - G.frost.slow;
+
+    const ang = angTo(e.x, e.y, player.x, player.y);
+    const d = dist(e.x, e.y, player.x, player.y);
+    const c = { ang, d, ax: Math.cos(ang), ay: Math.sin(ang), sp: e.speed * e.slow };
+
+    // per-type behaviour (default = chase). Boss dispatched by its flag.
+    const beh = e.boss ? EBEHAVIOR.boss : EBEHAVIOR[e.type];
+    if (beh && beh.move) beh.move(e, c, dt);
+
+    e.vx = lerp(e.vx, c.ax * c.sp, 0.12);
+    e.vy = lerp(e.vy, c.ay * c.sp, 0.12);
 
     // light separation so they don't fully stack
     if (!e.boss) {
@@ -1385,16 +1615,9 @@ function updateEnemies(dt) {
     e.x = clamp(e.x, -lim, lim); e.y = clamp(e.y, -lim, lim);
 
     // contact with player
-    if (d < e.r + player.r) {
-      if (e.type === 'bomber') {
-        explodeAt(e.x, e.y, 70 * S().areaMul, RD);
-        if (dist(e.x, e.y, player.x, player.y) < 70 + player.r) hurtPlayer(e.dmg);
-        killEnemy(e, false);
-      } else {
-        hurtPlayer(e.dmg);
-        // knock the enemy back a touch
-        e.vx -= ax * 60; e.vy -= ay * 60;
-      }
+    if (c.d < e.r + player.r) {
+      if (beh && beh.contact) beh.contact(e, c);
+      else { hurtPlayer(e.dmg); e.vx -= c.ax * 60; e.vy -= c.ay * 60; } // default knockback
     }
   }
 }
@@ -1439,6 +1662,16 @@ function explodeAt(x, y, radius, color) {
 function damageEnemy(e, dmg, opts) {
   if (e.dead) return;
   opts = opts || {};
+  // Shielder: a frontal shield (faces the player) soaks most incoming projectile damage.
+  if (e.type === 'shielder' && opts.proj && (opts.kbx || opts.kby)) {
+    const from = Math.atan2(-opts.kby, -opts.kbx);   // direction the shot came from
+    let da = from - (e.shieldA ?? angTo(e.x, e.y, player.x, player.y));
+    while (da > Math.PI) da -= TAU; while (da < -Math.PI) da += TAU;
+    if (Math.abs(da) < SHIELDER_ARC) {
+      dmg *= (1 - SHIELDER_BLOCK);
+      spawnParticle(e.x + Math.cos(from) * e.r, e.y + Math.sin(from) * e.r, 0, 0, 0.2, 3, BL, 'spark');
+    }
+  }
   let crit = false;
   if (Math.random() < S().crit) { crit = true; dmg *= S().critMult; }
   dmg = Math.round(dmg);
@@ -1487,6 +1720,13 @@ function killEnemy(e, reward) {
 
     // splitter children
     if (e.type === 'splitter') {
+      for (let i = 0; i < 3; i++) {
+        const a = rand(0, TAU);
+        spawnEnemy('mini', e.x + Math.cos(a) * 14, e.y + Math.sin(a) * 14, { vx: Math.cos(a) * 120, vy: Math.sin(a) * 120 });
+      }
+    }
+    // hatcher final brood
+    if (e.type === 'hatcher') {
       for (let i = 0; i < 3; i++) {
         const a = rand(0, TAU);
         spawnEnemy('mini', e.x + Math.cos(a) * 14, e.y + Math.sin(a) * 14, { vx: Math.cos(a) * 120, vy: Math.sin(a) * 120 });
@@ -1633,18 +1873,26 @@ function updateProjectiles(dt) {
       for (let j = 0; j < _q.length; j++) {
         const e = _q[j];
         if (e.dead) continue;
+        if (e.intangible > 0) continue;   // phantoms phase through projectiles
         if (p.hit && p.hit.has(e.id)) continue;
         if (dist2(p.x, p.y, e.x, e.y) < (p.r + e.r) ** 2) {
+          // Reflector: a chance to bounce the shot back at the player as a hostile bolt.
+          if (e.type === 'reflector' && p.kind !== 'missile' && Math.random() < REFLECTOR_CHANCE) {
+            const a = angTo(e.x, e.y, player.x, player.y);
+            spawnEnemyProjectile(e.x, e.y, Math.cos(a) * REFLECTOR_SHOT, Math.sin(a) * REFLECTOR_SHOT, p.dmg * 0.6, CY);
+            spawnParticle(e.x, e.y, 0, 0, 0.25, 4, CY, 'spark');
+            p.life = 0; break;
+          }
           if (p.kind === 'missile') {
             explodeAt(p.x, p.y, p.blast, OR);
             grid.query(p.x, p.y, p.blast, _q);
             for (let k = 0; k < _q.length; k++) { const e2 = _q[k]; if (!e2.dead && dist2(p.x, p.y, e2.x, e2.y) < (p.blast + e2.r) ** 2) damageEnemy(e2, p.dmg, { color: OR, kbx: e2.x - p.x, kby: e2.y - p.y, kb: 90 }); }
             p.life = 0; break;
           } else if (p.kind === 'glaive') {
-            damageEnemy(e, p.dmg, { kbx: p.vx, kby: p.vy, kb: 50, color: GR });
+            damageEnemy(e, p.dmg, { kbx: p.vx, kby: p.vy, kb: 50, color: GR, proj: true });
             if (p.hit) p.hit.add(e.id);   // hit-set lets it re-hit after clearing on the return pass
           } else {
-            damageEnemy(e, p.dmg, { kbx: p.vx, kby: p.vy, kb: 60, color: p.color });
+            damageEnemy(e, p.dmg, { kbx: p.vx, kby: p.vy, kb: 60, color: p.color, proj: true });
             if (p.hit) p.hit.add(e.id);
             if (p.pierce > 0) p.pierce--;
             else { p.life = 0; break; }
@@ -1668,6 +1916,7 @@ function updateParticles(dt) {
   for (let i = G.floaters.length - 1; i >= 0; i--) { const f = G.floaters[i]; f.life -= dt; f.y += f.vy * dt; f.vy *= 0.94; if (f.life <= 0) G.floaters.splice(i, 1); }
   for (let i = G.beams.length - 1; i >= 0; i--) { if ((G.beams[i].life -= dt) <= 0) G.beams.splice(i, 1); }
   for (let i = G.arcs.length - 1; i >= 0; i--) { if ((G.arcs[i].life -= dt) <= 0) G.arcs.splice(i, 1); }
+  for (let i = G.telegraphs.length - 1; i >= 0; i--) { if ((G.telegraphs[i].life -= dt) <= 0) G.telegraphs.splice(i, 1); }
 }
 
 /* ===========================================================================
@@ -1697,12 +1946,14 @@ function update(dt) {
     player.vy = player.dashDir.y * speed * 4.2;
     if (Math.random() < 0.8) spawnParticle(player.x, player.y, rand(-30, 30), rand(-30, 30), 0.25, 3, CY, 'spark');
   } else {
-    player.vx = lerp(player.vx, mv.x * speed * mv.mag, 0.2);
-    player.vy = lerp(player.vy, mv.y * speed * mv.mag, 0.2);
+    const ms = speed * G.playerSlow;            // disruptor fields drag this below 1
+    player.vx = lerp(player.vx, mv.x * ms * mv.mag, 0.2);
+    player.vy = lerp(player.vy, mv.y * ms * mv.mag, 0.2);
   }
   player.x += player.vx * dt; player.y += player.vy * dt;
   const lim = ARENA / 2 - player.r;
   player.x = clamp(player.x, -lim, lim); player.y = clamp(player.y, -lim, lim);
+  G.playerSlow = 1;                             // reset; disruptors re-apply during updateEnemies
 
   // aim toward movement or nearest enemy
   if (Math.hypot(player.vx, player.vy) > 30) player.aim = Math.atan2(player.vy, player.vx);
@@ -1884,6 +2135,20 @@ function render() {
     }
     ctx.stroke();
   }
+  // enemy attack telegraphs — warning shapes that pulse + intensify before the hit lands
+  for (const tg of G.telegraphs) {
+    const k = 1 - tg.life / tg.max;                                   // 0 -> 1 as the hit nears
+    const a = Math.max(0, (0.12 + 0.5 * k) * (0.65 + 0.35 * Math.sin(G.time * 20)));
+    if (tg.kind === 'line') {
+      const ex = tg.x + Math.cos(tg.a) * tg.len, ey = tg.y + Math.sin(tg.a) * tg.len;
+      ctx.strokeStyle = rgba(tg.color, a); ctx.lineWidth = tg.w * (0.4 + 0.8 * k);
+      ctx.beginPath(); ctx.moveTo(tg.x, tg.y); ctx.lineTo(ex, ey); ctx.stroke();
+    } else {
+      ctx.strokeStyle = rgba(tg.color, a); ctx.lineWidth = 2 + 3 * k;
+      ctx.beginPath(); ctx.arc(tg.x, tg.y, tg.r, 0, TAU); ctx.stroke();
+      ctx.fillStyle = rgba(tg.color, a * 0.16); ctx.fill();
+    }
+  }
   // particles (sparks + rings)
   for (const p of G.particles) {
     const a = p.life / p.max;
@@ -1922,17 +2187,26 @@ function render() {
   for (const g of G.gems) { ctx.fillStyle = GR; poly(g.x, g.y, 4.5, 4, G.time * 3); ctx.fill(); }
   // enemies
   for (const e of G.enemies) {
-    ctx.lineWidth = e.boss ? 4 : 2.2;
+    const phasing = e.type === 'phantom' && e.intangible > 0;
+    if (phasing) ctx.globalAlpha = 0.3;          // intangible phantoms go translucent
+    ctx.lineWidth = e.boss ? 4 : (e.type === 'juggernaut' ? 3.2 : 2.2);
     ctx.strokeStyle = e.flash > 0.3 ? WH : e.color;
     ctx.fillStyle = e.flash > 0.5 ? rgba(WH, 0.8) : rgba(e.color, e.slow < 1 ? 0.45 : 0.22);
     drawShapeFor(e); ctx.fill(); ctx.stroke();
     if (e.slow < 1) { ctx.strokeStyle = rgba('#bff', 0.6); ctx.lineWidth = 1; drawShapeFor(e); ctx.stroke(); }
-    // boss / elite health ring
+    // shielder: bright frontal shield arc facing the player
+    if (e.type === 'shielder') {
+      const sa = e.shieldA ?? angTo(e.x, e.y, player.x, player.y);
+      ctx.strokeStyle = rgba(BL, 0.9); ctx.lineWidth = 3.5;
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 5, sa - SHIELDER_ARC, sa + SHIELDER_ARC); ctx.stroke();
+    }
+    if (phasing) ctx.globalAlpha = 1;
+    // boss / elite / juggernaut health bar
     if (e.boss) { /* drawn in HUD */ }
-    else if (e.elite || (e.maxHp > 60 && e.hp < e.maxHp)) {
+    else if (e.elite || e.type === 'juggernaut' || (e.maxHp > 60 && e.hp < e.maxHp)) {
       const w = e.r * 2;
       ctx.fillStyle = rgba('#000', 0.5); ctx.fillRect(e.x - w / 2, e.y - e.r - 8, w, 3);
-      ctx.fillStyle = e.color; ctx.fillRect(e.x - w / 2, e.y - e.r - 8, w * (e.hp / e.maxHp), 3);
+      ctx.fillStyle = e.color; ctx.fillRect(e.x - w / 2, e.y - e.r - 8, w * clamp(e.hp / e.maxHp, 0, 1), 3);
     }
   }
   // enemy projectiles core
@@ -2116,9 +2390,9 @@ function startGame() {
   Object.assign(G, {
     state: 'playing', time: 0, shake: 0, hitstop: 0, flash: 0,
     enemies: [], eProj: [], pProj: [], gems: [], pickups: [],
-    particles: [], floaters: [], beams: [], arcs: [],
+    particles: [], floaters: [], beams: [], arcs: [], telegraphs: [],
     kills: 0, score: 0, combo: 0, comboTimer: 0,
-    pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: 75, bossNum: 0, boss: null, frost: null,
+    pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: 75, bossNum: 0, boss: null, frost: null, playerSlow: 1,
   });
   enemyId = 1;
   player.x = player.y = 0; player.vx = player.vy = 0;
