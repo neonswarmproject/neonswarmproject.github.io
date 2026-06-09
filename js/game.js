@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen). Bump the minor by 0.1 for each completed prompt.
-const VERSION = '1.3';
+const VERSION = '1.4';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -1196,12 +1196,12 @@ const ETYPES = {
   charger:    { hp: 34,  speed: 70,  r: 14, dmg: 16, xp: 3,  color: OR, shape: 'tri' },
   lancer:     { hp: 30,  speed: 60,  r: 13, dmg: 12, xp: 4,  color: PU, shape: 'penta' },
   hatcher:    { hp: 52,  speed: 50,  r: 18, dmg: 10, xp: 4,  color: GR, shape: 'spiky' },
-  phantom:    { hp: 26,  speed: 112, r: 12, dmg: 12, xp: 4,  color: PU, shape: 'diamond' },
+  phantom:    { hp: 24,  speed: 90,  r: 11, dmg: 10, xp: 3,  color: PU, shape: 'diamond' },
   reflector:  { hp: 44,  speed: 64,  r: 14, dmg: 10, xp: 5,  color: CY, shape: 'hex' },
-  detonator:  { hp: 40,  speed: 80,  r: 14, dmg: 14, xp: 4,  color: RD, shape: 'spiky' },
-  disruptor:  { hp: 46,  speed: 56,  r: 15, dmg: 10, xp: 5,  color: MA, shape: 'circle' },
-  saw:        { hp: 38,  speed: 132, r: 15, dmg: 14, xp: 4,  color: YE, shape: 'spiky' },
-  juggernaut: { hp: 340, speed: 40,  r: 30, dmg: 22, xp: 18, color: OR, shape: 'hex' },
+  detonator:  { hp: 40,  speed: 100, r: 16, dmg: 22, xp: 4,  color: RD, shape: 'spiky' },
+  disruptor:  { hp: 35,  speed: 80,  r: 14, dmg: 8,  xp: 4,  color: MA, shape: 'circle' },
+  saw:        { hp: 50,  speed: 80,  r: 16, dmg: 14, xp: 4,  color: YE, shape: 'spiky' },
+  juggernaut: { hp: 220, speed: 50,  r: 30, dmg: 24, xp: 12, color: OR, shape: 'hex' },
 };
 
 // Late-game difficulty curve. HP ramps hard past ~4 min (cubic term); speed is
@@ -1346,12 +1346,19 @@ const SHIELDER_ARC = 1.05, SHIELDER_BLOCK = 0.8;          // half-arc (~60deg) a
 const MENDER_CD = 2.2, MENDER_RANGE = 150, MENDER_HEAL = 14, MENDER_KEEP = 220;
 const CHARGER_WIND = 0.7, CHARGER_DASH = 0.45, CHARGER_DASHMUL = 4.0, CHARGER_RANGE = 360, CHARGER_CD = [2.2, 3.6];
 const LANCER_WIND = 0.65, LANCER_CD = [2.0, 3.2], LANCER_SHOT = 460, LANCER_KEEP = 240, LANCER_RANGE = 700;
-const HATCHER_CD = 3.0, HATCHER_BROOD = 2;
-const PHANTOM_CD = [2.4, 3.8], PHANTOM_PHASE = 0.35, PHANTOM_TP = 240;
+const HATCHER_CD = 3.0, HATCHER_BROOD = 2, HATCHER_DEATH = [4, 6];
+const PHANTOM_CD = 2.0, PHANTOM_FADE = 0.3, PHANTOM_POST = 0.5, PHANTOM_NEAR = 0.55, PHANTOM_MIN = 90; // blink ~every 2s, closer to player; intangible through fade + arrival
 const REFLECTOR_CHANCE = 0.3, REFLECTOR_SHOT = 300;
-const DETO_WIND = 0.8, DETO_STAGGER = 0.45, DETO_R0 = 80, DETO_RSTEP = 46, DETO_CD = [4, 7];
-const DISRUPTOR_RANGE = 200, DISRUPTOR_SLOW = 0.55;
-const JUG_WIND = 0.9, JUG_CD = [3.5, 5.5], JUG_SLAM_R = 150;
+const DETO_ARM = 0.7, DETO_STAGGER = 0.28, DETO_R0 = 70, DETO_RSTEP = 50; // bomber: accelerating blink, then 3 staggered rings on contact/death
+const DISRUPTOR_RANGE = 200, DISRUPTOR_SLOW = 0.8; // mild (~20%) slow — deliberately not frustrating
+const JUG_CD = [4, 6], JUG_WIND = 0.9, JUG_CHARGE_DASH = 0.5, JUG_CHARGE_MUL = 4.5, JUG_CHARGE_RANGE = 480, JUG_SUMMON = 3;
+
+// Arm a detonator (shared by its contact hook and its lethal-damage hook).
+function armDetonator(e) {
+  if (e.detonating) return;
+  e.detonating = true; e.detoPhase = 0; e.detoArm = DETO_ARM; e.blinkT = 0; e.flash = 1;
+  addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: DETO_R0, dur: DETO_ARM, color: RD });
+}
 
 /* Per-type behaviour registry. Each entry may define move(e,c,dt) (mutates the
    movement context c = {ang,d,ax,ay,sp}, fires, telegraphs) and/or contact(e,c)
@@ -1496,49 +1503,60 @@ const EBEHAVIOR = {
       }
     },
   },
-  // Phantom: periodically blinks near the player and is briefly intangible.
+  // Phantom: blinks ~every 2s closer to the player. A fade-out telegraphs the
+  // blink, and it is intangible (takes NO damage) through the fade + ~0.5s after.
   phantom: {
     move(e, c, dt) {
       if (e.intangible > 0) e.intangible -= dt;
-      e.phaseT = (e.phaseT ?? rand(PHANTOM_CD[0], PHANTOM_CD[1])) - dt;
+      if (e.phState === 'fade') {
+        c.sp *= 0.3; e.fadeT -= dt;
+        e.ghostA = clamp(e.fadeT / PHANTOM_FADE, 0, 1);          // 1 -> 0: visibly fading out (the telegraph)
+        if (e.fadeT <= 0) {
+          const nd = Math.max(PHANTOM_MIN, c.d * PHANTOM_NEAR), a = rand(0, TAU), lim = ARENA / 2 - e.r;
+          e.x = clamp(player.x + Math.cos(a) * nd, -lim, lim);
+          e.y = clamp(player.y + Math.sin(a) * nd, -lim, lim);
+          e.vx = 0; e.vy = 0; e.ghostA = 0;
+          e.intangible = PHANTOM_POST;                           // lingering invulnerability after arrival
+          e.phState = null; e.phaseT = PHANTOM_CD + rand(-0.3, 0.3);
+          spawnParticle(e.x, e.y, 0, 0, 0.4, e.r, PU, 'spark');
+        }
+        return;
+      }
+      e.phaseT = (e.phaseT ?? (PHANTOM_CD + rand(-0.3, 0.3))) - dt;
       if (e.phaseT <= 0) {
-        e.phaseT = rand(PHANTOM_CD[0], PHANTOM_CD[1]);
-        e.intangible = PHANTOM_PHASE;
-        const a = rand(0, TAU), r = PHANTOM_TP + rand(-40, 60), lim = ARENA / 2 - e.r;
-        e.x = clamp(player.x + Math.cos(a) * r, -lim, lim);
-        e.y = clamp(player.y + Math.sin(a) * r, -lim, lim);
-        e.vx = 0; e.vy = 0;
-        spawnParticle(e.x, e.y, 0, 0, 0.4, e.r, PU, 'spark');
+        e.phState = 'fade'; e.fadeT = PHANTOM_FADE;
+        e.intangible = PHANTOM_FADE + PHANTOM_POST;              // immune the instant it starts fading
       }
     },
     contact(e, c) { if (e.intangible > 0) return; hurtPlayer(e.dmg); e.vx -= c.ax * 60; e.vy -= c.ay * 60; },
   },
-  // Detonator: a staggered 3-ring AoE, each ring telegraphed before it lands.
+  // Detonator: a heavy bomber. Chases like a bomber; on contact or on death it
+  // arms (accelerating blink telegraph) then erupts in 3 staggered rings.
   detonator: {
     move(e, c, dt) {
-      if (e.detoPhase > 0) {
-        c.sp *= 0.25; e.detoT -= dt;
-        if (e.detoT <= 0) {
-          const ring = 4 - e.detoPhase;            // 1,2,3
-          const R = DETO_R0 + (ring - 1) * DETO_RSTEP;
-          explodeAt(e.x, e.y, R, RD);
-          if (dist(e.x, e.y, player.x, player.y) < R + player.r) hurtPlayer(e.dmg * 0.8);
-          e.detoPhase--;
-          if (e.detoPhase > 0) {
-            e.detoT = DETO_STAGGER;
-            addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: DETO_R0 + ring * DETO_RSTEP, dur: DETO_STAGGER, color: RD });
-          } else { e.detoCD = rand(DETO_CD[0], DETO_CD[1]); }
-        }
+      if (!e.detonating) return;                                // unarmed -> default chase
+      c.sp = 0;                                                 // freeze once committed
+      if (e.detoPhase === 0) {                                  // accelerating-blink windup
+        e.detoArm -= dt;
+        e.blinkT -= dt;
+        if (e.blinkT <= 0) { e.flash = 1; e.blinkT = 0.04 + 0.2 * Math.max(0, e.detoArm) / DETO_ARM; }
+        if (e.detoArm <= 0) { e.detoPhase = 1; e.detoT = 0; }
         return;
       }
-      e.detoCD = (e.detoCD ?? rand(DETO_CD[0], DETO_CD[1])) - dt;
-      if (e.detoCD <= 0 && c.d < 600) {
-        e.detoPhase = 3; e.detoT = DETO_WIND;
-        addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: DETO_R0, dur: DETO_WIND, color: RD });
+      e.detoT -= dt;                                            // fire the rings, staggered outward
+      if (e.detoT <= 0) {
+        const R = DETO_R0 + (e.detoPhase - 1) * DETO_RSTEP;
+        explodeAt(e.x, e.y, R, RD); e.flash = 1;
+        if (dist(e.x, e.y, player.x, player.y) < R + player.r) hurtPlayer(e.dmg);
+        e.detoPhase++;
+        if (e.detoPhase > 3) { killEnemy(e, true); return; }
+        e.detoT = DETO_STAGGER;
+        addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: DETO_R0 + (e.detoPhase - 1) * DETO_RSTEP, dur: DETO_STAGGER, color: RD });
       }
     },
+    contact(e) { armDetonator(e); },                            // touching the player sets it off
   },
-  // Disruptor: emits a field that slows the player while it's nearby.
+  // Disruptor: emits a field that mildly slows the player while it's nearby.
   disruptor: {
     move(e, c) {
       if (c.d < DISRUPTOR_RANGE) {
@@ -1547,24 +1565,48 @@ const EBEHAVIOR = {
       }
     },
   },
-  // Juggernaut: slow mini-boss that telegraphs a heavy ground-slam AoE.
+  // Juggernaut: rare mini-boss. Telegraphs, then either charges along a line or
+  // summons a few minions. Its health bar is always shown (render loop).
   juggernaut: {
     move(e, c, dt) {
-      if (e.slamPhase) {
-        c.sp *= 0.1; e.slamT -= dt;
-        if (e.slamT <= 0) {
-          e.slamPhase = false; e.jugCD = rand(JUG_CD[0], JUG_CD[1]);
-          explodeAt(e.x, e.y, JUG_SLAM_R, OR);
-          if (dist(e.x, e.y, player.x, player.y) < JUG_SLAM_R + player.r) hurtPlayer(e.dmg);
-          G.shake = Math.min(1, G.shake + 0.5);
+      if (e.jugState === 'charge') {
+        c.ax = Math.cos(e.jugA); c.ay = Math.sin(e.jugA); c.sp = e.speed * JUG_CHARGE_MUL;
+        e.jugT -= dt;
+        if (e.jugT <= 0) { e.jugState = null; e.jugCD = rand(JUG_CD[0], JUG_CD[1]); }
+        return;
+      }
+      if (e.jugState === 'wind') {
+        c.sp *= 0.2; e.jugT -= dt;
+        if (e.jugT <= 0) {
+          if (e.jugAct === 'charge') { e.jugState = 'charge'; e.jugT = JUG_CHARGE_DASH; }
+          else {
+            for (let k = 0; k < JUG_SUMMON; k++) { const a = rand(0, TAU); spawnEnemy(pick(['rusher', 'grunt']), e.x + Math.cos(a) * (e.r + 12), e.y + Math.sin(a) * (e.r + 12), null); }
+            G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: 8, mr: e.r + 50, life: 0.5, max: 0.5, color: OR, kind: 'ring' });
+            e.jugState = null; e.jugCD = rand(JUG_CD[0], JUG_CD[1]);
+          }
         }
         return;
       }
       e.jugCD = (e.jugCD ?? rand(JUG_CD[0], JUG_CD[1])) - dt;
-      if (e.jugCD <= 0 && c.d < JUG_SLAM_R + 60) {
-        e.slamPhase = true; e.slamT = JUG_WIND;
-        addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: JUG_SLAM_R, dur: JUG_WIND, color: OR });
+      if (e.jugCD <= 0 && c.d < 760) {
+        e.jugAct = Math.random() < 0.5 ? 'charge' : 'summon';
+        e.jugState = 'wind'; e.jugT = JUG_WIND;
+        if (e.jugAct === 'charge') { e.jugA = c.ang; addTelegraph({ kind: 'line', x: e.x, y: e.y, a: e.jugA, len: JUG_CHARGE_RANGE, w: 20, dur: JUG_WIND, color: OR }); }
+        else addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: e.r + 60, dur: JUG_WIND, color: OR });
       }
+    },
+  },
+  // Saw: a fast buzzsaw that flies in a straight line, bouncing off the arena
+  // walls. High contact damage; spins rapidly (rot handled in updateEnemies).
+  saw: {
+    move(e, c) {
+      const lim = ARENA / 2 - e.r;
+      if (e.sawA === undefined) e.sawA = angTo(e.x, e.y, player.x, player.y);
+      let vx = Math.cos(e.sawA), vy = Math.sin(e.sawA);
+      if ((e.x <= -lim && vx < 0) || (e.x >= lim && vx > 0)) vx = -vx;
+      if ((e.y <= -lim && vy < 0) || (e.y >= lim && vy > 0)) vy = -vy;
+      e.sawA = Math.atan2(vy, vx);
+      c.ax = vx; c.ay = vy;                                      // straight heading; c.sp keeps frost slow
     },
   },
 };
@@ -1661,6 +1703,8 @@ function explodeAt(x, y, radius, color) {
 
 function damageEnemy(e, dmg, opts) {
   if (e.dead) return;
+  if (e.intangible > 0) return;            // intangible (phantom blink) = takes no damage
+  if (e.detonating) return;                // detonator mid-sequence is immune until it bursts
   opts = opts || {};
   // Shielder: a frontal shield (faces the player) soaks most incoming projectile damage.
   if (e.type === 'shielder' && opts.proj && (opts.kbx || opts.kby)) {
@@ -1677,6 +1721,7 @@ function damageEnemy(e, dmg, opts) {
   dmg = Math.round(dmg);
   e.hp -= dmg;
   e.flash = 1;
+  if (e.type === 'detonator' && e.hp <= 0) { armDetonator(e); e.hp = 1; return; } // bomber bursts instead of dying
   if (opts.kb) { const l = Math.hypot(opts.kbx, opts.kby) || 1; e.x += opts.kbx / l * opts.kb * 0.02; e.y += opts.kby / l * opts.kb * 0.02; e.vx += opts.kbx / l * opts.kb; e.vy += opts.kby / l * opts.kb; }
   if (!opts.silent) {
     floater(e.x, e.y - e.r, crit ? dmg + '!' : '' + dmg, crit ? YE : (opts.color || WH), crit ? 20 : 13);
@@ -1725,9 +1770,10 @@ function killEnemy(e, reward) {
         spawnEnemy('mini', e.x + Math.cos(a) * 14, e.y + Math.sin(a) * 14, { vx: Math.cos(a) * 120, vy: Math.sin(a) * 120 });
       }
     }
-    // hatcher final brood
+    // hatcher final brood (4-6 minis, a bigger splitter)
     if (e.type === 'hatcher') {
-      for (let i = 0; i < 3; i++) {
+      const brood = randi(HATCHER_DEATH[0], HATCHER_DEATH[1]);
+      for (let i = 0; i < brood; i++) {
         const a = rand(0, TAU);
         spawnEnemy('mini', e.x + Math.cos(a) * 14, e.y + Math.sin(a) * 14, { vx: Math.cos(a) * 120, vy: Math.sin(a) * 120 });
       }
@@ -2188,7 +2234,7 @@ function render() {
   // enemies
   for (const e of G.enemies) {
     const phasing = e.type === 'phantom' && e.intangible > 0;
-    if (phasing) ctx.globalAlpha = 0.3;          // intangible phantoms go translucent
+    if (phasing) ctx.globalAlpha = (e.phState === 'fade') ? clamp(0.25 + 0.7 * (e.ghostA ?? 1), 0.25, 1) : 0.3; // fade-out telegraph, then ghostly
     ctx.lineWidth = e.boss ? 4 : (e.type === 'juggernaut' ? 3.2 : 2.2);
     ctx.strokeStyle = e.flash > 0.3 ? WH : e.color;
     ctx.fillStyle = e.flash > 0.5 ? rgba(WH, 0.8) : rgba(e.color, e.slow < 1 ? 0.45 : 0.22);

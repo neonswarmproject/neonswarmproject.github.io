@@ -4,6 +4,31 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v1.4 — 2026-06-09 — Enemy fidelity pass
+
+Aligned five v1.3 enemies with their original design briefs (behaviour + stats):
+
+- **Saw** now flies in a **straight line and bounces off the arena walls**
+  (was a chaser). Stats to brief: hp 50, speed 80, r 16.
+- **Detonator** is now a true **heavy bomber**: it chases, and on **contact or
+  death** it arms (accelerating-blink telegraph) then erupts in **3 staggered
+  concentric rings** (was a periodic stand-off attacker). Immune while arming so
+  it always gets to burst. Stats to brief: speed 100, dmg 22, r 16.
+- **Juggernaut** now **charges along a telegraphed line OR summons a few minions**
+  (was a ground-slam). Stats to brief: hp 220, speed 50, dmg 24, xp 12.
+- **Phantom** now **blinks ~every 2s closer to the player**, shows a **fade-out
+  telegraph** before each blink, and is **truly intangible (takes no damage)**
+  through the fade + ~0.5s after (previously AoE/melee still hit it). Stats to
+  brief: hp 24, speed 90.
+- **Disruptor** slow softened from ~45% to a **mild ~20%** ("light, not
+  frustrating"). Stats to brief: hp 35, speed 80, dmg 8.
+- **Hatcher** now releases **4–6** minis on death (was 3).
+
+Engine: `damageEnemy` gained intangible/arming immunity guards; a shared
+`armDetonator()` drives both the contact and lethal-damage paths. Verified: zero
+console errors, 60fps at ~135 enemies, all 20 types spawning, every reworked
+behaviour observed at runtime.
+
 ## v1.3 — 2026-06-08 — Twelve new enemies & a telegraph system
 
 ### Telegraph system
