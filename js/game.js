@@ -70,6 +70,10 @@ function rgba(h, a) { const c = hexToRgb(h); return `rgba(${c[0]},${c[1]},${c[2]
 const ARENA = 4200;          // arena spans -ARENA/2 .. ARENA/2 on each axis
 const BASE_SPEED = 232;
 
+// v2 boss-rush cadence (declared early: the G literal reads these at boot)
+const FIRST_BOSS_AT    = 45;   // s — the opening 1v1 duel is the hook
+const BOSS_FARM_WINDOW = 75;   // s of adaptive farming between boss kills
+
 /* ===========================================================================
    2. GLOW SPRITE CACHE & DRAW HELPERS
    ========================================================================= */
@@ -174,10 +178,11 @@ const G = {
   dirKps: 0,                       // decaying kill counter -> clear-rate signal
   dirDps: 0,                       // decaying damage-taken counter -> stress signal
   spawnRamp: 1,                    // 0 after a bomb, climbs back over BOMB_RAMP_TIME
-  nextBossAt: 75,
+  nextBossAt: FIRST_BOSS_AT,
   bossNum: 0,                      // running total of bosses spawned
-  bossIndex: 0,                    // position in BOSS_ORDER (0 = intro overlord)
-  bossTier: 0,                     // New Game+ tier; bosses return stronger when the order wraps
+  bossBag: [],                     // shuffled bag of upcoming bosses (refilled per cycle)
+  bossBanner: null,                // {name, life, max} — WARNING banner on boss arrival
+  bossTier: 0,                     // completed bag cycles; bosses return stronger
   inputHiccup: 0,                  // brief (<=0.5s) movement-input loss from GLITCH boss
   glitchFX: 0,                     // screen-space glitch overlay intensity 0..1
   boss: null,
@@ -1412,25 +1417,37 @@ function director(dt) {
       }
     }
   }
-  // boss cadence (spawnBoss advances index/tier/bossNum itself)
-  if (!G.boss && G.time >= G.nextBossAt) {
-    spawnBoss();
-    G.nextBossAt += BOSS_INTERVAL;
-  }
+  // boss cadence: bosses are the main event. The next one is scheduled when
+  // the current one dies (killEnemy sets nextBossAt = time + BOSS_FARM_WINDOW).
+  if (!G.boss && G.time >= G.nextBossAt) spawnBoss();
 }
 
 /* ===========================================================================
    BOSS SYSTEM — registry + spawn + brain (replaces the old inline OVERLORD).
-   Every boss: {id,name,color,r,speed,hpBase,suppressSpawns,drop,phaseThresholds,
-   update(e,dt),draw(e),onPhase?(e,phase)}. The boss enemy carries e.bdef/e.data/
-   e.phase. New Game+: when BOSS_ORDER wraps, bossTier++ (stronger/faster).
+   Every boss: {id,name,color,r,speed,hpMul,drop,phaseThresholds,update(e,dt),
+   draw(e),onPhase?(e,phase)}. The boss enemy carries e.bdef/e.data/e.phase.
+   v2: bosses come from a shuffled bag (no repeats per cycle); every boss
+   suppresses normal spawns and sweeps the arena on arrival; when the bag
+   refills, bossTier++ and bosses return stronger.
    ========================================================================= */
-const BOSS_ORDER = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden'];
-const BOSS_INTERVAL = 150;             // seconds between bosses
-const BOSS_TIER_HP = 0.6;              // +HP per New Game+ tier
-const BOSS_TIER_SPEED = 0.08;          // +speed per tier
-const BOSS_HP_DIFF_BASE = 0.6, BOSS_HP_DIFF = 0.6;  // difficultyFactor = base + diffScale.hp * mul
+const BOSS_IDS = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden'];
+// v2 boss-rush: a shuffled bag picks the next boss — no repeats within a cycle
+// and OVERLORD has no guaranteed intro slot. Scaling comes from ELAPSED TIME +
+// completed cycles (tier), never a per-boss difficulty rank, so a "hard" boss
+// drawn early is fair and any boss drawn late is appropriately tougher.
+const BOSS_BASE_HP        = 950;   // calibrated: opening duel beatable with the starting weapon
+const BOSS_HP_PER_MIN     = 0.55;  // +HP per elapsed minute
+const BOSS_HP_PER_TIER    = 0.85;  // +HP per completed bag cycle
+const BOSS_DMG_BASE       = 18;
+const BOSS_DMG_PER_MIN    = 0.10;
+const BOSS_DMG_PER_TIER   = 0.25;
+const BOSS_SPEED_PER_TIER = 0.08;
+const BOSS_XP_LEVELS      = 5;     // a roster boss pays out ~5 level-ups of XP
+const BOSS_GEM_COUNT      = 26;    // ...as a burst of this many gems
+const BOSS_BANNER_T       = 2.4;   // s the WARNING banner stays up
+const BOSS_SWEEP_HITSTOP  = 0.10, BOSS_SWEEP_SHAKE = 0.9;
 const BOSS_PHASE_SHAKE = 0.4;
+function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
 // attack damage as fractions of the boss's own (already diff-scaled) e.dmg
 const B_BULLET = 0.5, B_BEAM = 0.8, B_NOVA = 0.9;
 
@@ -1442,25 +1459,55 @@ function bossRing(e, n, speed, dmgFrac, rot, color, opts) {
 }
 function countType(t) { let n = 0; for (const e of G.enemies) if (e.type === t && !e.dead) n++; return n; }
 
-function spawnBoss() {
-  const id = BOSS_ORDER[G.bossIndex];
+// Boss arrival: the existing swarm is DISINTEGRATED in a spectacular shockwave
+// — per-enemy bursts, expanding rings, flash, hitstop — never silently deleted.
+// Swept enemies yield nothing (no gems/children). Runs BEFORE the boss spawns
+// so the enemy cap can never block the boss itself.
+function bossSweepArena(x, y, color) {
+  let swept = 0;
+  for (const o of G.enemies) {
+    if (o.boss || o.dead) continue;
+    o.dead = true; swept++;
+    G.particles.push({ x: o.x, y: o.y, vx: 0, vy: 0, r: 4, mr: o.r * 3, life: 0.5, max: 0.5, color: o.color, kind: 'ring' });
+    for (let i = 0; i < 6; i++) {
+      const a = rand(0, TAU), s = rand(80, 380);
+      spawnParticle(o.x, o.y, Math.cos(a) * s, Math.sin(a) * s, rand(0.3, 0.7), rand(2, 4), o.color, 'spark');
+    }
+  }
+  G.eProj.length = 0;
+  for (let k = 0; k < 3; k++)
+    G.particles.push({ x, y, vx: 0, vy: 0, r: 40, mr: 900 + k * 350, life: 0.7 + k * 0.15, max: 0.7 + k * 0.15, color: k % 2 ? WH : color, kind: 'ring' });
+  if (swept) {
+    sfx('bigExplode');
+    G.hitstop = Math.max(G.hitstop, BOSS_SWEEP_HITSTOP);
+    G.shake = Math.min(1, G.shake + BOSS_SWEEP_SHAKE);
+    G.flash = Math.max(G.flash, 0.45); G.flashColor = WH;
+  }
+}
+
+function spawnBoss(forcedId) {
+  if (!G.bossBag.length) {
+    G.bossBag = shuffle(BOSS_IDS.slice());
+    if (G.bossNum > 0) G.bossTier++;          // full cycle completed -> tier up
+  }
+  const id = forcedId || G.bossBag.pop();
   const def = BOSSES[id];
   const p = spawnRingPosition();
-  const dsc = diffScale();
-  const difficultyFactor = BOSS_HP_DIFF_BASE + dsc.hp * BOSS_HP_DIFF;
-  const hp = def.hpBase * (1 + G.bossTier * BOSS_TIER_HP) * difficultyFactor;
+  const mins = G.time / 60;
+  bossSweepArena(p.x, p.y, def.color);        // clear the field first (frees cap room)
+  const hp = BOSS_BASE_HP * (def.hpMul || 1) * (1 + mins * BOSS_HP_PER_MIN + G.bossTier * BOSS_HP_PER_TIER);
   const e = spawnEnemy('tank', p.x, p.y, {
     boss: true, r: def.r, color: def.color, shape: 'boss',
     hp, maxHp: hp,
-    speed: def.speed * dsc.speed * (1 + G.bossTier * BOSS_TIER_SPEED),
-    dmg: 24 * dsc.dmg, xp: 60 + G.bossNum * 20,
+    speed: def.speed * (1 + G.bossTier * BOSS_SPEED_PER_TIER),
+    dmg: BOSS_DMG_BASE * (1 + mins * BOSS_DMG_PER_MIN + G.bossTier * BOSS_DMG_PER_TIER),
+    xp: 60 + G.bossNum * 20,
     name: def.name + (G.bossTier > 0 ? ' ' + romanize(G.bossTier + 1) : ''),
-    bdef: def, data: {}, phase: 0, suppressSpawns: def.suppressSpawns,
+    bdef: def, data: {}, phase: 0, suppressSpawns: true,   // v2: every boss owns the arena
   });
   G.boss = e;
-  G.bossIndex++;
-  if (G.bossIndex >= BOSS_ORDER.length) { G.bossTier++; G.bossIndex = 1; } // wrap past intro -> NG+
   G.bossNum++;
+  G.bossBanner = { name: e.name, life: BOSS_BANNER_T, max: BOSS_BANNER_T };
   sfx('boss');
   G.flash = 0.5; G.flashColor = def.color;
   G.shake = 1;
@@ -1493,8 +1540,8 @@ const WARDEN_PULL = 78, WARDEN_PULL_R = 540, WARDEN_SPIRAL_GAP = 0.13, WARDEN_SP
 const BOSSES = {
   /* ---- SLOT 0: OVERLORD (intro) ---- */
   overlord: {
-    id: 'overlord', name: 'OVERLORD', color: WH, r: 58, speed: 44, hpBase: 1100,
-    suppressSpawns: false, drop: 'heal', phaseThresholds: [0.5],
+    id: 'overlord', name: 'OVERLORD', color: WH, r: 58, speed: 44, hpMul: 1.0,
+    drop: 'heal', phaseThresholds: [0.5],
     update(e, dt) {
       const d = e.data, p2 = e.phase >= 1;
       d.fireT = (d.fireT ?? OVL_FIRE) - dt;
@@ -1534,8 +1581,8 @@ const BOSSES = {
 
   /* ---- SLOT 1: PRISM — The Refractor ---- */
   prism: {
-    id: 'prism', name: 'PRISM', color: CY, r: 54, speed: 40, hpBase: 1400,
-    suppressSpawns: false, drop: 'prism', phaseThresholds: [0.66, 0.33],
+    id: 'prism', name: 'PRISM', color: CY, r: 54, speed: 40, hpMul: 1.05,
+    drop: 'prism', phaseThresholds: [0.66, 0.33],
     update(e, dt) {
       const d = e.data, cols = [CY, MA, YE];
       if (d.beamState === undefined) { d.beamState = 'idle'; d.beamCD = PRISM_BEAM_CD; }
@@ -1591,8 +1638,8 @@ const BOSSES = {
 
   /* ---- SLOT 2: THE HIVE — Dronemother (the spawner) ---- */
   hive: {
-    id: 'hive', name: 'THE HIVE', color: GR, r: 58, speed: 34, hpBase: 1800,
-    suppressSpawns: false, drop: 'nectar', phaseThresholds: [0.5],
+    id: 'hive', name: 'THE HIVE', color: GR, r: 58, speed: 34, hpMul: 1.15,
+    drop: 'nectar', phaseThresholds: [0.5],
     update(e, dt) {
       const d = e.data, p2 = e.phase >= 1;
       d.droneCD = (d.droneCD ?? HIVE_DRONE_CD) - dt;
@@ -1631,8 +1678,8 @@ const BOSSES = {
 
   /* ---- SLOT 3: GLITCH — The Corrupted ---- */
   glitch: {
-    id: 'glitch', name: 'GLITCH', color: CY, r: 50, speed: 40, hpBase: 1500,
-    suppressSpawns: true, drop: 'cleansave', phaseThresholds: [0.5],
+    id: 'glitch', name: 'GLITCH', color: CY, r: 50, speed: 40, hpMul: 1.05,
+    drop: 'cleansave', phaseThresholds: [0.5],
     update(e, dt) {
       const d = e.data, p2 = e.phase >= 1;
       d.tpCD = (d.tpCD ?? GLITCH_TP_CD) - dt;
@@ -1678,8 +1725,8 @@ const BOSSES = {
 
   /* ---- SLOT 4: THE CONDUCTOR — Synthwave Heart ---- */
   conductor: {
-    id: 'conductor', name: 'THE CONDUCTOR', color: MA, r: 50, speed: 38, hpBase: 1700,
-    suppressSpawns: true, drop: 'tempo', phaseThresholds: [0.66, 0.33],
+    id: 'conductor', name: 'THE CONDUCTOR', color: MA, r: 50, speed: 38, hpMul: 1.1,
+    drop: 'tempo', phaseThresholds: [0.66, 0.33],
     update(e, dt) {
       const d = e.data;
       if (d.beat === undefined) { d.beat = 0; d.beatT = 0; d.bars = 0; }
@@ -1707,8 +1754,8 @@ const BOSSES = {
 
   /* ---- SLOT 5: WARDEN — The Gravity Well ---- */
   warden: {
-    id: 'warden', name: 'THE WARDEN', color: PU, r: 54, speed: 40, hpBase: 1900,
-    suppressSpawns: true, drop: 'singularity', phaseThresholds: [0.66, 0.33],
+    id: 'warden', name: 'THE WARDEN', color: PU, r: 54, speed: 40, hpMul: 1.2,
+    drop: 'singularity', phaseThresholds: [0.66, 0.33],
     update(e, dt) {
       const d = e.data, lim = ARENA / 2 - player.r;
       // continuous gravity pull (gentle, escapable by moving/dashing)
@@ -2158,6 +2205,7 @@ function killEnemy(e, reward) {
   explodeAt(e.x, e.y, e.boss ? 200 : (e.elite ? 90 : 40), e.color);
   if (e.boss) {
     sfx('bigExplode'); G.hitstop = 0.12; G.flash = 0.5; G.flashColor = e.color;
+    G.nextBossAt = G.time + BOSS_FARM_WINDOW;   // open the next farming window
     if (Sound) { Sound.setIntensity(0.5); Sound.setMusicTempo(116); }
     if (e.bdef) { spawnPickup(e.x, e.y, e.bdef.drop); spawnPickup(e.x + 44, e.y, 'heal'); } // exclusive drop + heal
   }
@@ -2169,10 +2217,18 @@ function killEnemy(e, reward) {
     const mult = 1 + Math.min(G.combo, 60) * 0.02;
     G.score += Math.floor((e.xp * 6 + e.r) * mult);
 
-    // gems
-    const gemN = e.boss ? 30 : (e.elite ? 6 : 1);
-    for (let i = 0; i < gemN; i++)
-      spawnGem(e.x + rand(-e.r, e.r), e.y + rand(-e.r, e.r), Math.max(1, Math.round(e.xp / (e.boss ? 1 : 1))));
+    // gems — a roster boss pays out ~BOSS_XP_LEVELS level-ups of XP (fixes the
+    // v1.5 ~20-levels-at-once dump); normals/elites are unchanged
+    if (e.boss) {
+      const eff = Math.max(0.25, S().xpGain * (player.buffT.nectar > 0 ? 2 : 1));
+      const gemV = Math.max(1, Math.round(xpForLevels(BOSS_XP_LEVELS) / eff / BOSS_GEM_COUNT));
+      for (let i = 0; i < BOSS_GEM_COUNT; i++)
+        spawnGem(e.x + rand(-e.r, e.r), e.y + rand(-e.r, e.r), gemV);
+    } else {
+      const gemN = e.elite ? 6 : 1;
+      for (let i = 0; i < gemN; i++)
+        spawnGem(e.x + rand(-e.r, e.r), e.y + rand(-e.r, e.r), Math.max(1, Math.round(e.xp)));
+    }
 
     // pickups (boss drops handled in the boss branch above)
     if (e.elite) spawnPickup(e.x, e.y, pick(['heal', 'magnet', 'bomb']));
@@ -2306,6 +2362,14 @@ function applyPickup(type) {
     floater(player.x, player.y - 24, 'SINGULARITY', PU, 18); sfx('coin');
     for (let i = 0; i < 16; i++) spawnParticle(player.x, player.y, rand(-130, 130), rand(-130, 130), 0.6, 3, PU, 'spark');
   }
+}
+
+// Total XP needed to carry the player through their next n level-ups (mirrors
+// the xpNext curve in addXp). Used to size boss XP payouts.
+function xpForLevels(n) {
+  let total = Math.max(0, player.xpNext - player.xp), lvl = player.level;
+  for (let i = 1; i < n; i++) { lvl++; total += Math.floor(6 + lvl * 4 + Math.pow(lvl, 1.55)); }
+  return Math.max(1, total);
 }
 
 function addXp(v) {
@@ -2504,6 +2568,7 @@ function update(dt) {
   G.shake = Math.max(0, G.shake - dt * 1.6);
   if (G.flash > 0) G.flash = Math.max(0, G.flash - dt * 2.4);
   if (G.glitchFX > 0) G.glitchFX = Math.max(0, G.glitchFX - dt * 1.5);
+  if (G.bossBanner && (G.bossBanner.life -= dt) <= 0) G.bossBanner = null;
 
   // music intensity ramps with on-screen pressure + time
   if (Sound) Sound.setIntensity(clamp(G.enemies.length / 120 + G.time / 600 + (G.boss ? 0.5 : 0), 0, 1));
@@ -2873,6 +2938,22 @@ function drawHUD() {
     ctx.textBaseline = 'alphabetic';
   }
 
+  // boss incoming banner (high-contrast warning, slides in + pulses)
+  if (G.bossBanner) {
+    const bb = G.bossBanner, a = clamp(bb.life / bb.max, 0, 1);
+    const slide = Math.min(1, (bb.max - bb.life) * 5);
+    ctx.fillStyle = rgba('#000', 0.5 * a * slide);
+    ctx.fillRect(0, H * 0.30 - 34, W, 68);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = '900 34px Segoe UI, sans-serif';
+    ctx.fillStyle = rgba(RD, (0.7 + 0.3 * Math.sin(G.time * 12)) * a * slide);
+    ctx.fillText('⚠ ' + bb.name + ' ⚠', W / 2, H * 0.30 - 8);
+    ctx.font = '700 13px Segoe UI, sans-serif';
+    ctx.fillStyle = rgba(WH, 0.85 * a * slide);
+    ctx.fillText('THE SWARM SCATTERS — DUEL BEGINS', W / 2, H * 0.30 + 22);
+    ctx.textBaseline = 'alphabetic';
+  }
+
   // boss bar + phase pips
   if (G.boss) {
     const b = G.boss, bw = Math.min(560, W - 40), bx = (W - bw) / 2, by = 78, bh = 14;
@@ -2954,7 +3035,7 @@ function startGame() {
     enemies: [], eProj: [], pProj: [], gems: [], pickups: [],
     particles: [], floaters: [], beams: [], arcs: [], telegraphs: [],
     kills: 0, score: 0, combo: 0, comboTimer: 0,
-    pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: 75, bossNum: 0, bossIndex: 0, bossTier: 0,
+    pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: FIRST_BOSS_AT, bossNum: 0, bossBag: [], bossBanner: null, bossTier: 0,
     dirIntensity: 1, dirStress: 0, dirKps: 0, dirDps: 0, spawnRamp: 1,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });
