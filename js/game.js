@@ -169,6 +169,11 @@ const G = {
   pendingLevels: 0,
   rerolls: 1,
   spawnTimer: 0,
+  dirIntensity: 1,                 // hidden adaptive pressure 0.55..1.65 (never shown)
+  dirStress: 0,                    // hidden player-stress 0..1 (never shown)
+  dirKps: 0,                       // decaying kill counter -> clear-rate signal
+  dirDps: 0,                       // decaying damage-taken counter -> stress signal
+  spawnRamp: 1,                    // 0 after a bomb, climbs back over BOMB_RAMP_TIME
   nextBossAt: 75,
   bossNum: 0,                      // running total of bosses spawned
   bossIndex: 0,                    // position in BOSS_ORDER (0 = intro overlord)
@@ -333,6 +338,7 @@ function hurtPlayer(dmg) {
   if (player.invuln > 0 || player.dashTime > 0 || G.state !== 'playing') return;
   const real = Math.max(1, dmg - player.stats.armor);
   player.hp -= real;
+  G.dirDps += real;                       // feeds the hidden stress signal
   player.invuln = 0.75;
   G.shake = Math.min(1, G.shake + 0.5);
   G.flash = 0.6; G.flashColor = RD;
@@ -398,6 +404,14 @@ function firePlayerProjectile(o) {
   }
 }
 
+// v2 balance pass (Section B): gentle buffs for under-picked weapons so more
+// builds are viable. Tuned small on purpose; revisit after human playtests.
+const PULSE_CD = 0.6, PULSE_CD_LV4 = 0.09;   // lv4 card says "Faster fire rate" — now true
+const FROST_DPS_BASE = 7;                     // was 5
+const WHIP_DMG_BASE = 24;                     // was 20
+const SENTRY_DMG_BASE = 13, SENTRY_LIFE_BASE = 7;  // was 10 / 6
+const FLAK_DMG_BASE = 11;                     // was 9
+
 const WEAPONS = {
   /* ---- Pulse Cannon : auto-targeting bolts ---- */
   pulse: {
@@ -412,7 +426,7 @@ const WEAPONS = {
     update(self, dt) {
       self.t -= dt;
       const lv = self.level;
-      const cd = 0.6 / S().attackSpeedMul;
+      const cd = (PULSE_CD - (lv >= 4 ? PULSE_CD_LV4 : 0)) / S().attackSpeedMul;
       if (self.t > 0) return;
       self.t = cd;
       const count = 1 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 1 : 0) + (lv >= 7 ? 1 : 0) + (lv >= 9 ? 1 : 0) + (lv >= 11 ? 1 : 0);
@@ -639,7 +653,7 @@ const WEAPONS = {
       const lv = self.level;
       const radius = (110 + (lv >= 2 ? 35 : 0) + (lv >= 4 ? 45 : 0) + (lv >= 6 ? 70 : 0) + (lv >= 8 ? 45 : 0) + (lv >= 10 ? 60 : 0)) * S().areaMul;
       const slow = 0.42 + (lv >= 3 ? 0.12 : 0) + (lv >= 6 ? 0.12 : 0) + (lv >= 9 ? 0.08 : 0);
-      const dps = (5 + (lv >= 3 ? 4 : 0) + (lv >= 5 ? 6 : 0) + (lv >= 7 ? 6 : 0) + (lv >= 10 ? 8 : 0)) * S().damageMul;
+      const dps = (FROST_DPS_BASE + (lv >= 3 ? 4 : 0) + (lv >= 5 ? 6 : 0) + (lv >= 7 ? 6 : 0) + (lv >= 10 ? 8 : 0)) * S().damageMul;
       G.frost = { radius, slow, dmg: dps };
       // damage tick handled here
       self.t = (self.t || 0) - dt;
@@ -833,7 +847,7 @@ const WEAPONS = {
       const a = target ? angTo(player.x, player.y, target.x, target.y) : player.aim;
       const spd = 430 * S().projSpeedMul;
       const shr = 5 + (lv >= 2 ? 2 : 0) + (lv >= 5 ? 3 : 0) + (lv >= 8 ? 4 : 0);
-      const dmg = 9 * (1 + (lv >= 3 ? 0.4 : 0) + (lv >= 6 ? 0.45 : 0)) * S().damageMul;
+      const dmg = FLAK_DMG_BASE * (1 + (lv >= 3 ? 0.4 : 0) + (lv >= 6 ? 0.45 : 0)) * S().damageMul;
       const spread = 0.6 + (lv >= 4 ? 0.3 : 0) + (lv >= 7 ? 0.5 : 0);
       const life0 = 0.55 * S().projDurMul;
       firePlayerProjectile({ x: player.x, y: player.y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, r: 6, dmg: 0, pierce: 0, life: life0, life0, color: YE, kind: 'flak', shr, shrDmg: dmg, shrSpread: spread, aimA: a, burst: false });
@@ -859,7 +873,7 @@ const WEAPONS = {
       self.t = cd;
       const range = (150 + (lv >= 4 ? 40 : 0) + (lv >= 7 ? 50 : 0)) * Math.sqrt(S().areaMul);
       const half = 0.7 + (lv >= 3 ? 0.25 : 0) + (lv >= 6 ? 0.3 : 0);
-      const dmg = (20 + (lv >= 2 ? 8 : 0) + (lv >= 5 ? 8 : 0) + (lv >= 8 ? 12 : 0)) * S().damageMul;
+      const dmg = (WHIP_DMG_BASE + (lv >= 2 ? 8 : 0) + (lv >= 5 ? 8 : 0) + (lv >= 8 ? 12 : 0)) * S().damageMul;
       const swipes = 1 + (lv >= 9 ? 1 : 0);
       for (let s = 0; s < swipes; s++) {
         const aim = player.aim + s * Math.PI;
@@ -897,9 +911,9 @@ const WEAPONS = {
       if (!self.data) self.data = { drones: [], t: 0 };
       const d = self.data;
       const maxD = 1 + (lv >= 3 ? 1 : 0) + (lv >= 6 ? 1 : 0) + (lv >= 8 ? 1 : 0);
-      const lifeT = 6 + (lv >= 4 ? 3 : 0);
+      const lifeT = SENTRY_LIFE_BASE + (lv >= 4 ? 3 : 0);
       const fireCd = (0.5 - (lv >= 7 ? 0.15 : 0)) / S().attackSpeedMul;
-      const dmg = (10 + (lv >= 2 ? 4 : 0) + (lv >= 5 ? 6 : 0)) * S().damageMul;
+      const dmg = (SENTRY_DMG_BASE + (lv >= 2 ? 4 : 0) + (lv >= 5 ? 6 : 0)) * S().damageMul;
       const pr = lv >= 5 ? 1 : 0;
       for (let i = d.drones.length - 1; i >= 0; i--) {
         const dr = d.drones[i]; dr.t -= dt;
@@ -1115,10 +1129,36 @@ function buildChoices() {
     for (let i = 0; i < work.length; i++) { r -= work[i].weight; if (r <= 0) { idx = i; break; } }
     chosen.push(work.splice(idx, 1)[0]);
   }
+  // Early-run variety guarantee (Section B): the first several level-ups always
+  // offer a real build choice — at least one weapon option AND one passive, and
+  // very early also one NEW weapon — so survival never hinges on high-rolling
+  // one specific card.
+  if (player.level <= CARD_VARIETY_LEVELS && chosen.length === 3) {
+    const isWeapon = c => c.kind === 'weapon-new' || c.kind === 'weapon-up';
+    const swapIn = (pred, keep) => {
+      if (chosen.some(pred)) return;
+      const opts = pool.filter(o => pred(o) && !chosen.includes(o));
+      if (!opts.length) return;
+      for (let i = chosen.length - 1; i >= 0; i--) {
+        if (keep(chosen[i])) continue;
+        chosen[i] = pick(opts); return;
+      }
+    };
+    swapIn(isWeapon, () => false);
+    swapIn(c => c.kind === 'passive', c => isWeapon(c) && chosen.filter(isWeapon).length <= 1);
+    if (player.level <= CARD_NEW_WEAPON_LEVELS && player.weapons.length < MAX_WEAPONS) {
+      swapIn(c => c.kind === 'weapon-new',
+             c => (c.kind === 'passive' && chosen.filter(x => x.kind === 'passive').length <= 1));
+    }
+  }
   // fallbacks if everything is maxed
   while (chosen.length < 3) chosen.push({ kind: 'bonus', id: 'bonus' });
   return chosen;
 }
+// Through this level, card offers guarantee a weapon + passive mix; through the
+// lower one they also guarantee a NEW weapon offer when one exists.
+const CARD_VARIETY_LEVELS = 6;
+const CARD_NEW_WEAPON_LEVELS = 4;
 
 function cardData(c) {
   if (c.kind === 'weapon-new') { const d = WEAPONS[c.id]; return { icon: d.icon, name: d.name, color: d.color, type: 'New Weapon', desc: d.info(1), level: 0, max: d.max, isNew: true }; }
@@ -1251,6 +1291,12 @@ function spawnEnemy(type, x, y, opts) {
     rot: rand(0, TAU), elite: false, boss: false, spawn: 0.0,
   };
   if (opts) Object.assign(e, opts);
+  // Adaptive mercy: when the hidden director says the player is struggling,
+  // fresh normals arrive slightly weaker. Bosses are NEVER softened.
+  if (!e.boss && G.dirIntensity < 1) {
+    const ease = 1 - DIR_STRENGTH_EASE * (1 - G.dirIntensity) / (1 - DIR_INTENSITY_MIN);
+    e.hp *= ease; e.maxHp = e.hp; e.dmg *= ease;
+  }
   if (e.elite) { e.r *= 1.5; e.hp *= 4; e.maxHp = e.hp; e.xp *= 6; e.dmg *= 1.3; }
   G.enemies.push(e);
   return e;
@@ -1258,7 +1304,8 @@ function spawnEnemy(type, x, y, opts) {
 
 function spawnRingPosition() {
   const a = rand(0, TAU);
-  const d = Math.hypot(W, H) / 2 + rand(60, 200);
+  // stressed players get a touch more breathing room (spawns land further out)
+  const d = Math.hypot(W, H) / 2 + rand(60, 200) + G.dirStress * DIR_STRESS_SPACE;
   let x = player.x + Math.cos(a) * d;
   let y = player.y + Math.sin(a) * d;
   const lim = ARENA / 2 - 30;
@@ -1295,35 +1342,72 @@ function pickEnemyType(m) {
   return 'grunt';
 }
 
-// Spawn director tuning. Late-game pressure: lower interval floor + faster batch
-// growth. Elites use a flat (no-luck) chance with a gentle time ramp.
-// NOTE: these constants will be retuned once meta-progression exists.
-const SPAWN_INTERVAL_MIN = 0.14;
-const SPAWN_BATCH_RATE   = 1.0;
+/* ---- v2 ADAPTIVE DIRECTOR (hidden hybrid: RE4 rank + L4D director) ----
+   Baseline: a gentle time curve (much calmer early game than v1.5).
+   Adaptive layer: a hidden intensity from player power (weapon levels,
+   damageMul, rolling clear rate) minus stress (recent damage taken, low HP).
+   Weak/struggling -> fewer + slightly weaker spawns, spawned further out;
+   strong/safe -> pressure climbs. Governs BETWEEN-boss farming windows only;
+   bosses are NEVER softened by it. All weights are named for playtesting. */
+const DIR_INTERVAL_BASE  = 1.65;   // s between spawn ticks at t=0 (was 1.05)
+const DIR_INTERVAL_SLOPE = 0.09;   // interval shrinks this much per minute
+const DIR_INTERVAL_MIN   = 0.30;   // hard floor (was 0.14)
+const DIR_BATCH_RATE     = 0.55;   // batch growth per minute (was 1.0)
+const DIR_PACK_CHANCE    = 0.08;   // pack-burst chance per tick (was 0.12)
+const DIR_PACK_BASE      = 4;      // pack size base (was 6 + minutes)
+const DIR_POWER_WLV      = 0.030;  // power per total weapon level
+const DIR_POWER_DMG      = 0.25;   // power per damageMul above 1
+const DIR_POWER_KPS      = 0.055;  // power per kill/sec (rolling)
+const DIR_STRESS_HP      = 0.90;   // stress per missing-HP fraction
+const DIR_STRESS_DPS     = 0.05;   // stress per damage-taken/sec (rolling)
+const DIR_KPS_HALFLIFE   = 6;      // s half-life of the kill-rate window
+const DIR_DPS_HALFLIFE   = 8;      // s half-life of the damage-taken window
+const DIR_SIGNAL_LERP    = 0.35;   // per-second smoothing toward the target
+const DIR_INTENSITY_MIN  = 0.55;   // throttle floor when struggling
+const DIR_INTENSITY_MAX  = 1.65;   // pressure ceiling when thriving
+const DIR_STRENGTH_EASE  = 0.30;   // up to -30% spawn hp/dmg at full mercy
+const DIR_STRESS_SPACE   = 140;    // extra spawn-ring distance at full stress
+const BOMB_RAMP_TIME     = 25;     // s for spawns to re-ramp after a bomb
 const ELITE_BASE_CHANCE  = 0.02;
 const ELITE_TIME_SCALE   = 0.004;
 const ELITE_CHANCE_MAX   = 0.07;
 function director(dt) {
   const m = G.time / 60;
+
+  // hidden signals (decay-windowed counters -> rates)
+  G.dirKps *= Math.exp(-dt * Math.LN2 / DIR_KPS_HALFLIFE);
+  G.dirDps *= Math.exp(-dt * Math.LN2 / DIR_DPS_HALFLIFE);
+  let wlv = 0; for (const w of player.weapons) wlv += w.level;
+  const kps = G.dirKps * Math.LN2 / DIR_KPS_HALFLIFE;
+  const dps = G.dirDps * Math.LN2 / DIR_DPS_HALFLIFE;
+  const power  = wlv * DIR_POWER_WLV + Math.max(0, S().damageMul - 1) * DIR_POWER_DMG + kps * DIR_POWER_KPS;
+  const stress = (1 - clamp(player.hp / player.maxHp, 0, 1)) * DIR_STRESS_HP + dps * DIR_STRESS_DPS;
+  const target = clamp(1 + power - stress, DIR_INTENSITY_MIN, DIR_INTENSITY_MAX);
+  G.dirIntensity = lerp(G.dirIntensity, target, Math.min(1, DIR_SIGNAL_LERP * dt));
+  G.dirStress = clamp(stress, 0, 1);
+
   // Normal waves — skipped entirely while a suppress-spawns boss is alive (it
   // controls the arena; it may still summon its own minions via spawnEnemy).
   if (!(G.boss && G.boss.suppressSpawns)) {
     G.spawnTimer -= dt;
-    const interval = clamp(1.05 - m * 0.08, SPAWN_INTERVAL_MIN, 1.05);
+    const interval = clamp(DIR_INTERVAL_BASE - m * DIR_INTERVAL_SLOPE, DIR_INTERVAL_MIN, DIR_INTERVAL_BASE);
     if (G.spawnTimer <= 0) {
       G.spawnTimer = interval;
-      const batch = 1 + Math.floor(m * SPAWN_BATCH_RATE) + (Math.random() < 0.2 ? 2 : 0);
+      const pressure = G.dirIntensity * G.spawnRamp;
+      let batch = Math.round((1 + m * DIR_BATCH_RATE) * pressure);
+      if (G.spawnRamp > 0.2) batch = Math.max(1, batch);
+      if (G.dirIntensity > 1.05 && Math.random() < 0.2) batch += 2;   // spikes only when thriving
       for (let i = 0; i < batch; i++) {
         const p = spawnRingPosition();
         const t = pickEnemyType(m);
         const elite = m > 1.5 && Math.random() < Math.min(ELITE_CHANCE_MAX, ELITE_BASE_CHANCE + m * ELITE_TIME_SCALE);
         spawnEnemy(t, p.x, p.y, elite ? { elite: true } : null);
       }
-      // occasional pack burst
-      if (m > 1 && Math.random() < 0.12) {
+      // occasional pack burst — only while the player isn't being buried
+      if (m > 1 && pressure > 0.9 && Math.random() < DIR_PACK_CHANCE) {
         const p = spawnRingPosition();
         const t = pickEnemyType(m);
-        for (let i = 0; i < 6 + (m | 0); i++)
+        for (let i = 0; i < DIR_PACK_BASE + Math.floor(m * 0.8); i++)
           spawnEnemy(t, p.x + rand(-60, 60), p.y + rand(-60, 60), null);
       }
     }
@@ -2080,6 +2164,7 @@ function killEnemy(e, reward) {
 
   if (reward !== false) {
     G.kills++;
+    G.dirKps += 1;                        // feeds the hidden clear-rate signal
     G.combo++; G.comboTimer = 2.6;
     const mult = 1 + Math.min(G.combo, 60) * 0.02;
     G.score += Math.floor((e.xp * 6 + e.r) * mult);
@@ -2197,6 +2282,7 @@ function applyPickup(type) {
     // (no gems, no pickups, no splitter children) via killEnemy(e, false).
     for (const e of G.enemies.slice()) { if (e.boss) continue; killEnemy(e, false); }
     G.eProj.length = 0;
+    G.spawnRamp = 0;                      // director re-ramps over BOMB_RAMP_TIME, no snap-back
     floater(player.x, player.y - 24, 'BOOM', OR, 22);
   } else if (type === 'prism') {            // Prism Shard — triple-fire
     player.buffT.triple = BUFF_TRIPLE_T;
@@ -2354,6 +2440,9 @@ function update(dt) {
 
   G.time += dt;
   G.frost = null;
+
+  // bomb aftermath: spawn pressure climbs back progressively, never snaps
+  if (G.spawnRamp < 1) G.spawnRamp = Math.min(1, G.spawnRamp + dt / BOMB_RAMP_TIME);
 
   // spawn waves / bosses
   director(dt);
@@ -2866,6 +2955,7 @@ function startGame() {
     particles: [], floaters: [], beams: [], arcs: [], telegraphs: [],
     kills: 0, score: 0, combo: 0, comboTimer: 0,
     pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: 75, bossNum: 0, bossIndex: 0, bossTier: 0,
+    dirIntensity: 1, dirStress: 0, dirKps: 0, dirDps: 0, spawnRamp: 1,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });
   enemyId = 1;
