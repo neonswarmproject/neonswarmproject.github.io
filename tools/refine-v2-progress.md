@@ -70,6 +70,37 @@ for every tunable. Zero console errors desktop + mobile.
       5. Write the human test checklist at the bottom of this file, set
          STATUS: AWAITING-HUMAN at the top, print OVERNIGHT-DONE, stop.
 
+## Human test checklist (v2.0-rc1 preview — http://localhost:8123)
+
+Desktop:
+- [ ] Title screen loads, version tag reads v2.0-rc1, no console errors (F12)
+- [ ] Early game feels calm (sparse spawns in the first 40s), movement turns
+      feel snappy, dash has a zoom punch + ghost trail and carries momentum
+- [ ] ~45s: swarm disintegrates in a shockwave, WARNING banner, a random boss
+      materializes (entrance animation) and duels you 1-on-1 with telegraphed
+      attacks; beatable with just the starting weapon by dodging
+- [ ] Boss death pays out a gem burst worth ~5 level-ups, drops its buff,
+      a heal, and a yellow GLYPH rune; normal spawns resume gently afterwards
+- [ ] Level-up cards: first picks always include a weapon AND a passive and
+      offer NEW weapons early; card text matches what the upgrade actually does
+- [ ] Click a creature → focus reticle appears, your weapons train on it;
+      click it again → focus off; click another → focus switches
+- [ ] Bomb pickup: field clears, then spawns ramp back over ~25s (no wall)
+- [ ] Survive 6 boss kills → all 6 glyph pips fill on the bottom-right slot →
+      "THE SIGIL IS FORGED" → press G → portal ritual at arena center →
+      THE ARCHITECT (5 phases, 4 shielded rune nodes — kill nodes first).
+      Beating it drops the Ascendant Core + permanent ARCHITECT SLAIN badge
+- [ ] Game over screen shows "This Run … % of best"
+
+Mobile (or DevTools device emulation):
+- [ ] Camera is zoomed out — you can actually see approaching enemies
+- [ ] Joystick appears where the thumb lands; re-placing the thumb never
+      causes a random direction twitch
+- [ ] Dash via the » button or double-tap WHILE moving with the other finger —
+      movement never stops or stutters during dash
+- [ ] A short tap on a creature focuses it without interrupting movement
+- [ ] Tapping the pulsing sigil slot summons THE ARCHITECT (when forged)
+
 ## After human confirmation ONLY
-merge refine/v2 → main, push to `neon` remote, bump VERSION to v2.0,
-update CHANGELOG.md, tag v2.0.
+merge refine/v2 → main, push to `neon` remote, bump VERSION to '2.0',
+update CHANGELOG.md, tag v2.0. (Deploys GitHub Pages live.)
