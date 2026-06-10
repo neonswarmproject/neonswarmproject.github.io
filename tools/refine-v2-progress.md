@@ -29,15 +29,15 @@ for every tunable. Zero console errors desktop + mobile.
       → portal ritual → 5-phase screen-dominating super-boss with destructible
       rune nodes, fixed brutal difficulty, Ascendant Core + permanent meta
       unlock (extra reroll + damage head start, title-screen badge)
-- [ ] E — Enemy levels: Lv scaling starts after first boss cycle/time
+- [x] E — Enemy levels: Lv scaling starts after first boss cycle/time
       threshold, "Lv N" badge only when level ≥ 2, named constants
-- [ ] F — Movement feel: quick turn response, dash velocity transfer, dash
+- [x] F — Movement feel: quick turn response, dash velocity transfer, dash
       camera zoom + motion trail, i-frames kept, smooth camera lerp
-- [ ] G — Mobile overhaul: camera zoom-out factor wired through ALL
+- [x] G — Mobile overhaul: camera zoom-out factor wired through ALL
       world<->screen math (magnet radius, spawn ring, telegraphs), true
       multi-touch (pointerId map), dynamic joystick with dead zone, dash on
       separate touch/double-tap that never stops movement
-- [ ] H — Focus target: G.focusTarget, click/tap creature to focus (toggle /
+- [x] H — Focus target: G.focusTarget, click/tap creature to focus (toggle /
       switch), auto-aim weapons prefer focus, tap-vs-drag thresholds on
       mobile, subtle reticle
 - [ ] I — Adaptive performance: device-tier startup budget

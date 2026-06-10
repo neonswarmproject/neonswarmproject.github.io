@@ -36,6 +36,19 @@ const ctx = canvas.getContext('2d');
 const boot = document.getElementById('boot');
 
 let W = 0, H = 0, DPR = 1;
+
+// v2 mobile view (Section G): zoom OUT on small touch screens so the player
+// sees a comparable slice of the arena to desktop. camZoom scales the world
+// transform; every world<->screen calculation divides by it (spawn ring,
+// magnet radius, grid extents, pointer picking).
+const MOBILE_ZOOM_MIN_DIM = 820;   // screens with min(W,H) below this zoom out
+const MOBILE_ZOOM = 0.62;          // world scale on small touch screens
+let camZoom = 1;
+function computeZoom() {
+  const touch = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+  camZoom = (touch && Math.min(W, H) < MOBILE_ZOOM_MIN_DIM) ? MOBILE_ZOOM : 1;
+}
+
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   W = window.innerWidth;
@@ -45,6 +58,7 @@ function resize() {
   canvas.style.width  = W + 'px';
   canvas.style.height = H + 'px';
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  computeZoom();
 }
 window.addEventListener('resize', resize);
 resize();
@@ -195,6 +209,7 @@ const G = {
   bossBanner: null,                // {name, life, max} — WARNING banner on boss arrival
   bossTier: 0,                     // completed bag cycles; bosses return stronger
   lvUnlockAt: null,                // time when enemy leveling unlocked (Section E)
+  focusTarget: null,               // creature the player tapped/clicked (Section H)
   glyphs: {},                      // boss id -> true once its Glyph Fragment is collected
   sigil: 0,                        // 0 none | 1 forged (all glyphs) | 2 consumed
   ritual: null,                    // {t} — ARCHITECT summoning countdown
@@ -224,10 +239,21 @@ const META = loadMeta();
    5. INPUT
    ========================================================================= */
 const keys = new Set();
-const pointer = { down: false, type: 'mouse', sx: 0, sy: 0, x: 0, y: 0 };
+const pointer = { down: false, type: 'mouse', sx: 0, sy: 0, x: 0, y: 0, t0: 0, moved: 0 };
 const IS_TOUCH = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 const JOY_MAX = 70;
 let lastTapTime = 0;
+
+/* ---- v2 MULTI-TOUCH (Section G): every finger tracked by pointerId.
+   One finger drives a dynamic joystick (anchored where it lands, with a dead
+   zone), other fingers can dash / tap-focus / hit UI — and NOTHING ever
+   interrupts movement. The legacy `pointer` object now serves mouse/pen only. */
+const touches = new Map();    // pointerId -> {x,y,sx,sy,t0,role:'move'|'free'|'ui'}
+let joyId = null;             // pointerId currently driving the joystick
+const JOY_DEAD = 10;          // px dead zone (fixes "reapply finger -> random direction")
+const TAP_MAX_DIST = 18;      // px drift allowed for a tap (vs a drag)
+const TAP_MAX_TIME = 0.25;    // s held allowed for a tap
+const DOUBLE_TAP_T = 280;     // ms window for the double-tap dash
 
 function key(e, down) {
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
@@ -275,34 +301,86 @@ function onPointerDown(e) {
   // ignore clicks that land on HTML buttons / overlays
   if (e.target !== canvas) return;
   unlockAudio();
-  pointer.down = true;
-  pointer.type = e.pointerType || 'mouse';
   const r = canvas.getBoundingClientRect();
-  pointer.sx = pointer.x = e.clientX - r.left;
-  pointer.sy = pointer.y = e.clientY - r.top;
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+
+  if (G.state === 'title') { startGame(); return; }
 
   // SIGIL slot tap/click (Section D) — consumes the press, never moves/dashes
   if (G.state === 'playing' && G.sigilUI &&
-      dist(pointer.sx, pointer.sy, G.sigilUI.x, G.sigilUI.y) <= G.sigilUI.r + 8) {
-    pointer.down = false;
+      dist(x, y, G.sigilUI.x, G.sigilUI.y) <= G.sigilUI.r + 8) {
     activateSigil();
+    if (e.pointerType === 'touch') touches.set(e.pointerId, { role: 'ui' });
     return;
   }
 
-  if (G.state === 'playing' && pointer.type === 'touch') {
+  if (e.pointerType === 'touch') {
+    // dash button: an independent touch — never touches the joystick state
+    if (G.state === 'playing' && dist(x, y, W - 56, H - 56) < 44) {
+      tryDash();
+      touches.set(e.pointerId, { role: 'ui' });
+      return;
+    }
+    // double-tap (any finger) dashes, preserving the current move direction
     const now = performance.now();
-    if (now - lastTapTime < 280) tryDash();
+    if (G.state === 'playing' && now - lastTapTime < DOUBLE_TAP_T) tryDash();
     lastTapTime = now;
+    const rec = { x, y, sx: x, sy: y, t0: now, role: 'free' };
+    touches.set(e.pointerId, rec);
+    if (joyId === null) { joyId = e.pointerId; rec.role = 'move'; }   // joystick lands here
+    return;
   }
-  if (G.state === 'title') startGame();
+
+  // mouse / pen: hold-to-move toward the cursor (unchanged)
+  pointer.down = true;
+  pointer.type = e.pointerType || 'mouse';
+  pointer.sx = pointer.x = x;
+  pointer.sy = pointer.y = y;
+  pointer.t0 = performance.now();
+  pointer.moved = 0;
 }
 function onPointerMove(e) {
-  if (!pointer.down) return;
   const r = canvas.getBoundingClientRect();
-  pointer.x = e.clientX - r.left;
-  pointer.y = e.clientY - r.top;
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  const rec = touches.get(e.pointerId);
+  if (rec) {
+    if (rec.role !== 'ui') { rec.x = x; rec.y = y; }
+    return;
+  }
+  if (pointer.down && e.pointerType !== 'touch') {
+    pointer.moved += Math.abs(x - pointer.x) + Math.abs(y - pointer.y);
+    pointer.x = x; pointer.y = y;
+  }
 }
-function onPointerUp() { pointer.down = false; }
+function onPointerUp(e) {
+  const rec = touches.get(e.pointerId);
+  if (rec) {
+    touches.delete(e.pointerId);
+    if (e.pointerId === joyId) {
+      joyId = null;
+      // promote a remaining free finger to the joystick (anchor at its spot,
+      // so the hand-off causes no movement jump)
+      for (const [id, t] of touches) {
+        if (t.role === 'free') { joyId = id; t.role = 'move'; t.sx = t.x; t.sy = t.y; break; }
+      }
+    }
+    // a short, stationary touch is a TAP -> focus attempt (Section H)
+    if (rec.role !== 'ui' && G.state === 'playing' &&
+        (performance.now() - rec.t0) / 1000 < TAP_MAX_TIME &&
+        dist(rec.x, rec.y, rec.sx, rec.sy) < TAP_MAX_DIST) {
+      tryFocusAt(rec.sx, rec.sy);
+    }
+    return;
+  }
+  if (e.pointerType !== 'touch') {
+    // a clean click (no drag) is a focus attempt on PC (Section H)
+    if (pointer.down && G.state === 'playing' && pointer.moved < 6 &&
+        performance.now() - pointer.t0 < TAP_MAX_TIME * 1000) {
+      tryFocusAt(pointer.sx, pointer.sy);
+    }
+    pointer.down = false;
+  }
+}
 canvas.addEventListener('pointerdown', onPointerDown);
 window.addEventListener('pointermove', onPointerMove);
 window.addEventListener('pointerup', onPointerUp);
@@ -317,21 +395,56 @@ function moveVector() {
   if (keys.has('s') || keys.has('ArrowDown'))  dy += 1;
   if (dx || dy) { const l = Math.hypot(dx, dy); return { x: dx / l, y: dy / l, mag: 1, src: 'key' }; }
 
-  if (pointer.down) {
-    if (pointer.type === 'touch') {
-      let jx = pointer.x - pointer.sx, jy = pointer.y - pointer.sy;
+  // touch: the dedicated joystick pointer (dead zone kills phantom direction)
+  if (joyId !== null) {
+    const t = touches.get(joyId);
+    if (t) {
+      const jx = t.x - t.sx, jy = t.y - t.sy;
       const l = Math.hypot(jx, jy);
-      if (l < 8) return { x: 0, y: 0, mag: 0, src: 'touch' };
+      if (l < JOY_DEAD) return { x: 0, y: 0, mag: 0, src: 'touch' };
       const mag = Math.min(l / JOY_MAX, 1);
       return { x: jx / l, y: jy / l, mag, src: 'touch' };
-    } else {
-      const jx = pointer.x - W / 2, jy = pointer.y - H / 2;
-      const l = Math.hypot(jx, jy);
-      if (l < 14) return { x: 0, y: 0, mag: 0, src: 'mouse' };
-      return { x: jx / l, y: jy / l, mag: 1, src: 'mouse' };
     }
   }
+  if (pointer.down && pointer.type !== 'touch') {
+    const jx = pointer.x - W / 2, jy = pointer.y - H / 2;
+    const l = Math.hypot(jx, jy);
+    if (l < 14) return { x: 0, y: 0, mag: 0, src: 'mouse' };
+    return { x: jx / l, y: jy / l, mag: 1, src: 'mouse' };
+  }
   return { x: 0, y: 0, mag: 0, src: 'none' };
+}
+
+/* ---- v2 FOCUS TARGET (Section H): tap/click a creature to focus it; auto-
+   aiming weapons prefer the focus while it lives. Same creature toggles off,
+   another switches. Empty space never clears (no accidental drops). ---- */
+const FOCUS_PICK_R = 34;       // screen px — generous pick radius
+function screenToWorld(sx, sy) {
+  const z = (1 + G.dashZoom) * camZoom;
+  return { x: G.cam.x + (sx - W / 2) / z, y: G.cam.y + (sy - H / 2) / z };
+}
+function tryFocusAt(sx, sy) {
+  const w = screenToWorld(sx, sy);
+  const z = (1 + G.dashZoom) * camZoom;
+  const pickR = FOCUS_PICK_R / z;
+  let best = null, bd = Infinity;
+  for (const e of G.enemies) {
+    if (e.dead) continue;
+    const d = dist(w.x, w.y, e.x, e.y) - e.r;
+    if (d < pickR && d < bd) { bd = d; best = e; }
+  }
+  if (!best) return;                                          // empty space: keep focus
+  G.focusTarget = (G.focusTarget === best) ? null : best;     // toggle / switch
+  if (G.focusTarget) {
+    sfx('hover');
+    G.particles.push({ x: best.x, y: best.y, vx: 0, vy: 0, r: best.r, mr: best.r + 18, life: 0.3, max: 0.3, color: WH, kind: 'ring' });
+  }
+}
+function focusAlive() {
+  const f = G.focusTarget;
+  if (f && !f.dead) return f;
+  if (f) G.focusTarget = null;
+  return null;
 }
 
 /* ===========================================================================
@@ -396,6 +509,9 @@ function hurtPlayer(dmg) {
 const S = () => player.stats;
 
 function nearestEnemy(x, y, maxD) {
+  // focus target wins while alive and in range (Section H)
+  const f = focusAlive();
+  if (f && dist2(x, y, f.x, f.y) <= (maxD || 1e9) ** 2) return f;
   let best = null, bd = (maxD || 1e9) ** 2;
   const arr = G.enemies;
   for (let i = 0; i < arr.length; i++) {
@@ -414,7 +530,12 @@ function nearestEnemies(x, y, n) {
   }
   list.sort((a, b) => a[0] - b[0]);
   const out = [];
-  for (let i = 0; i < Math.min(n, list.length); i++) out.push(list[i][1]);
+  const f = focusAlive();
+  if (f) out.push(f);                                  // focus leads the volley
+  for (let i = 0; i < list.length && out.length < n; i++) {
+    const e = list[i][1];
+    if (e !== f) out.push(e);
+  }
   return out;
 }
 
@@ -1000,7 +1121,7 @@ const WEAPONS = {
       const strikes = 1 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 2 : 0) + (lv >= 8 ? 2 : 0);
       const dmg = (26 + (lv >= 3 ? 12 : 0) + (lv >= 6 ? 16 : 0)) * S().damageMul;
       const aoe = (70 + (lv >= 6 ? 40 : 0)) * S().areaMul;
-      const reach = Math.hypot(W, H) / 2;
+      const reach = Math.hypot(W / camZoom, H / camZoom) / 2;
       const near = (Math.random() < 0.75) ? nearestEnemies(player.x, player.y, 10) : null;
       for (let s = 0; s < strikes; s++) {
         let tx, ty;
@@ -1368,8 +1489,9 @@ function spawnEnemy(type, x, y, opts) {
 
 function spawnRingPosition() {
   const a = rand(0, TAU);
-  // stressed players get a touch more breathing room (spawns land further out)
-  const d = Math.hypot(W, H) / 2 + rand(60, 200) + G.dirStress * DIR_STRESS_SPACE;
+  // stressed players get a touch more breathing room (spawns land further out);
+  // camZoom widens the visible area, so the off-screen ring widens with it
+  const d = Math.hypot(W / camZoom, H / camZoom) / 2 + rand(60, 200) + G.dirStress * DIR_STRESS_SPACE;
   let x = player.x + Math.cos(a) * d;
   let y = player.y + Math.sin(a) * d;
   const lim = ARENA / 2 - 30;
@@ -2733,6 +2855,7 @@ const DROP_BOMB_CHANCE   = 0.009;
 function killEnemy(e, reward) {
   if (e.dead) return;
   e.dead = true;
+  if (G.focusTarget === e) G.focusTarget = null;
   explodeAt(e.x, e.y, e.boss ? 200 : (e.elite ? 90 : 40), e.color);
   if (e.boss) {
     sfx('bigExplode'); G.hitstop = 0.12; G.flash = 0.5; G.flashColor = e.color;
@@ -2820,7 +2943,7 @@ function updateGems(dt) {
   const arr = G.gems;
   const pr = S().pickup;
   // Queen's Nectar: continuously magnetize every on-screen gem while active.
-  if (player.buffT.nectar > 0) { const os = Math.hypot(W, H) / 2; for (const g of arr) if (dist(g.x, g.y, player.x, player.y) <= os) g.mag = true; }
+  if (player.buffT.nectar > 0) { const os = Math.hypot(W / camZoom, H / camZoom) / 2; for (const g of arr) if (dist(g.x, g.y, player.x, player.y) <= os) g.mag = true; }
   for (let i = arr.length - 1; i >= 0; i--) {
     const g = arr[i];
     g.t += dt;
@@ -2872,10 +2995,10 @@ function applyPickup(type, p) {
     floater(player.x, player.y - 24, '+HP', GR, 18); sfx('coin');
     for (let i = 0; i < 16; i++) spawnParticle(player.x, player.y, rand(-120, 120), rand(-120, 120), 0.5, 3, GR, 'spark');
   } else if (type === 'magnet') {
-    // Only magnetize gems that are currently on-screen. The world renders 1:1
-    // centered on the camera, and Math.hypot(W,H)/2 is exactly the off-screen
-    // spawn ring, so it equals the visible edge. Off-screen gems are left alone.
-    const onScreen = Math.hypot(W, H) / 2;
+    // Only magnetize gems that are currently on-screen. The world renders at
+    // camZoom centered on the camera, so hypot(W,H)/2 ÷ camZoom is the visible
+    // edge (and matches the off-screen spawn ring). Off-screen gems are left alone.
+    const onScreen = Math.hypot(W / camZoom, H / camZoom) / 2;
     for (const g of G.gems) if (dist(g.x, g.y, player.x, player.y) <= onScreen) g.mag = true;
     floater(player.x, player.y - 24, 'MAGNET', BL, 18); sfx('coin');
   } else if (type === 'bomb') {
@@ -2904,7 +3027,7 @@ function applyPickup(type, p) {
     floater(player.x, player.y - 24, 'TEMPO+', CY, 18); sfx('coin');
     for (let i = 0; i < 12; i++) spawnParticle(player.x, player.y, rand(-110, 110), rand(-110, 110), 0.45, 3, CY, 'spark');
   } else if (type === 'singularity') {      // Singularity Fragment — magnetize all + damage aura
-    const os = Math.hypot(W, H) / 2; for (const g of G.gems) if (dist(g.x, g.y, player.x, player.y) <= os) g.mag = true;
+    const os = Math.hypot(W / camZoom, H / camZoom) / 2; for (const g of G.gems) if (dist(g.x, g.y, player.x, player.y) <= os) g.mag = true;
     player.buffT.aura = BUFF_AURA_T; player.buffT.auraTick = 0;
     floater(player.x, player.y - 24, 'SINGULARITY', PU, 18); sfx('coin');
     for (let i = 0; i < 16; i++) spawnParticle(player.x, player.y, rand(-130, 130), rand(-130, 130), 0.6, 3, PU, 'spark');
@@ -3221,15 +3344,16 @@ function worldTransform() {
   if (G.shake > 0) { const t = G.shake * G.shake * 16; sx = rand(-t, t); sy = rand(-t, t); }
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.translate(W / 2, H / 2);
-  const z = 1 + G.dashZoom;            // dash punch-in (Section F)
+  const z = (1 + G.dashZoom) * camZoom;   // dash punch-in × mobile zoom-out
   ctx.scale(z, z);
   ctx.translate(-G.cam.x + sx, -G.cam.y + sy);
 }
 
 function drawGrid() {
   const step = 80;
-  const x0 = G.cam.x - W / 2 - step, x1 = G.cam.x + W / 2 + step;
-  const y0 = G.cam.y - H / 2 - step, y1 = G.cam.y + H / 2 + step;
+  const vw = W / camZoom, vh = H / camZoom;   // zoomed-out view sees more world
+  const x0 = G.cam.x - vw / 2 - step, x1 = G.cam.x + vw / 2 + step;
+  const y0 = G.cam.y - vh / 2 - step, y1 = G.cam.y + vh / 2 + step;
   ctx.lineWidth = 1;
   ctx.strokeStyle = rgba(CY, 0.05);
   ctx.beginPath();
@@ -3439,6 +3563,15 @@ function render() {
       const w = e.r * 2;
       ctx.fillStyle = rgba('#000', 0.5); ctx.fillRect(e.x - w / 2, e.y - e.r - 8, w, 3);
       ctx.fillStyle = e.color; ctx.fillRect(e.x - w / 2, e.y - e.r - 8, w * clamp(e.hp / e.maxHp, 0, 1), 3);
+    }
+    // focus reticle (Section H): four rotating arcs around the focused creature
+    if (G.focusTarget === e) {
+      const rr = e.r + 10 + 2 * Math.sin(G.time * 6);
+      ctx.strokeStyle = rgba(WH, 0.75); ctx.lineWidth = 1.5;
+      for (let k = 0; k < 4; k++) {
+        const a = G.time * 1.5 + k / 4 * TAU;
+        ctx.beginPath(); ctx.arc(e.x, e.y, rr, a, a + 0.7); ctx.stroke();
+      }
     }
     // level badge (Section E): only when meaningfully leveled
     if (e.lv > 1) {
@@ -3667,17 +3800,20 @@ function drawHUD() {
 }
 
 function drawTouch() {
-  // virtual joystick
-  if (pointer.down && pointer.type === 'touch') {
+  // dynamic virtual joystick (Section G): anchored where the thumb landed
+  const t = joyId !== null ? touches.get(joyId) : null;
+  if (t) {
     ctx.globalCompositeOperation = 'lighter';
-    glow(pointer.sx, pointer.sy, 60, CY, 0.15);
+    glow(t.sx, t.sy, 60, CY, 0.15);
     ctx.globalCompositeOperation = 'source-over';
     ctx.strokeStyle = rgba(WH, 0.25); ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(pointer.sx, pointer.sy, JOY_MAX, 0, TAU); ctx.stroke();
-    let jx = pointer.x - pointer.sx, jy = pointer.y - pointer.sy;
+    ctx.beginPath(); ctx.arc(t.sx, t.sy, JOY_MAX, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = rgba(WH, 0.12);
+    ctx.beginPath(); ctx.arc(t.sx, t.sy, JOY_DEAD, 0, TAU); ctx.stroke();
+    let jx = t.x - t.sx, jy = t.y - t.sy;
     const l = Math.hypot(jx, jy); if (l > JOY_MAX) { jx = jx / l * JOY_MAX; jy = jy / l * JOY_MAX; }
     ctx.fillStyle = rgba(CY, 0.7);
-    ctx.beginPath(); ctx.arc(pointer.sx + jx, pointer.sy + jy, 26, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(t.sx + jx, t.sy + jy, 26, 0, TAU); ctx.fill();
   }
   // dash button
   const bx = W - 56, by = H - 56;
@@ -3722,10 +3858,11 @@ function startGame() {
     pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: FIRST_BOSS_AT, bossNum: 0, bossBag: [], bossBanner: null, bossTier: 0,
     dirIntensity: 1, dirStress: 0, dirKps: 0, dirDps: 0, spawnRamp: 1,
     glyphs: {}, sigil: 0, ritual: null, sigilUI: null, lvUnlockAt: null,
-    dashZoom: 0, trail: [],
+    dashZoom: 0, trail: [], focusTarget: null,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });
   enemyId = 1;
+  touches.clear(); joyId = null;          // never carry touch state across runs
   player.x = player.y = 0; player.vx = player.vy = 0;
   player.buffT = { triple: 0, nectar: 0, aura: 0, auraTick: 0 };
   player.level = 1; player.xp = 0; player.xpNext = 6;
@@ -3806,13 +3943,8 @@ function toggleFull() {
   else (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
 }
 
-// touch on dash button
-canvas.addEventListener('pointerdown', e => {
-  if (!IS_TOUCH || G.state !== 'playing') return;
-  const r = canvas.getBoundingClientRect();
-  const x = e.clientX - r.left, y = e.clientY - r.top;
-  if (dist(x, y, W - 56, H - 56) < 40) { tryDash(); e.stopImmediatePropagation(); }
-}, true);
+// (the dash button is handled inside onPointerDown as an independent touch —
+// the old capture-phase listener is gone with the v2 multi-touch rewrite)
 
 // buttons
 document.getElementById('btnPlay').addEventListener('click', startGame);
