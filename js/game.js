@@ -74,6 +74,15 @@ const BASE_SPEED = 232;
 const FIRST_BOSS_AT    = 45;   // s — the opening 1v1 duel is the hook
 const BOSS_FARM_WINDOW = 75;   // s of adaptive farming between boss kills
 
+// v2 movement feel (Section F)
+const MOVE_LERP = 0.2;         // baseline velocity smoothing
+const TURN_ASSIST = 3.2;       // extra steering response when reversing at speed
+const DASH_TIME = 0.16, DASH_CD = 1.5, DASH_SPEED_MUL = 4.2, DASH_IFRAME = 0.28;
+const DASH_VEL_CARRY = 0.45;   // dash momentum kept when the dash ends
+const DASH_ZOOM = 0.06;        // camera punch-in while dashing
+const DASH_TRAIL_LIFE = 0.22;  // s each afterimage ghost lives
+const CAM_LERP = 0.12;         // smooth camera follow (never snaps)
+
 /* ===========================================================================
    2. GLOW SPRITE CACHE & DRAW HELPERS
    ========================================================================= */
@@ -162,6 +171,8 @@ const G = {
   state: 'title',                 // title | playing | levelup | paused | gameover
   time: 0,                        // seconds survived
   cam: { x: 0, y: 0 },
+  dashZoom: 0,                    // momentary camera punch-in while dashing
+  trail: [],                      // dash afterimage ghosts
   shake: 0,                       // trauma 0..1
   hitstop: 0,                     // seconds of frozen time
   flash: 0,                       // white/red screen flash 0..1
@@ -349,9 +360,9 @@ function tryDash() {
   const mv = moveVector();
   let d = (mv.mag > 0) ? { x: mv.x, y: mv.y } : { x: Math.cos(player.aim), y: Math.sin(player.aim) };
   player.dashDir = d;
-  player.dashTime = 0.16;
-  player.dashCD = 1.5;
-  player.invuln = Math.max(player.invuln, 0.28);
+  player.dashTime = DASH_TIME;
+  player.dashCD = DASH_CD;
+  player.invuln = Math.max(player.invuln, DASH_IFRAME);
   sfx('dash');
   for (let i = 0; i < 14; i++)
     spawnParticle(player.x, player.y, -d.x * rand(40, 160) + rand(-40, 40), -d.y * rand(40, 160) + rand(-40, 40), rand(0.2, 0.4), rand(2, 4), CY, 'spark');
@@ -3049,6 +3060,7 @@ function updateParticles(dt) {
   for (let i = G.beams.length - 1; i >= 0; i--) { if ((G.beams[i].life -= dt) <= 0) G.beams.splice(i, 1); }
   for (let i = G.arcs.length - 1; i >= 0; i--) { if ((G.arcs[i].life -= dt) <= 0) G.arcs.splice(i, 1); }
   for (let i = G.telegraphs.length - 1; i >= 0; i--) { if ((G.telegraphs[i].life -= dt) <= 0) G.telegraphs.splice(i, 1); }
+  for (let i = G.trail.length - 1; i >= 0; i--) { if ((G.trail[i].life -= dt) <= 0) G.trail.splice(i, 1); }
 }
 
 /* ===========================================================================
@@ -3093,13 +3105,26 @@ function update(dt) {
   const speed = BASE_SPEED * S().moveSpeedMul;
   if (player.dashTime > 0) {
     player.dashTime -= dt;
-    player.vx = player.dashDir.x * speed * 4.2;
-    player.vy = player.dashDir.y * speed * 4.2;
+    player.vx = player.dashDir.x * speed * DASH_SPEED_MUL;
+    player.vy = player.dashDir.y * speed * DASH_SPEED_MUL;
     if (Math.random() < 0.8) spawnParticle(player.x, player.y, rand(-30, 30), rand(-30, 30), 0.25, 3, CY, 'spark');
+    G.trail.push({ x: player.x, y: player.y, aim: player.aim, life: DASH_TRAIL_LIFE, max: DASH_TRAIL_LIFE });
+    if (player.dashTime <= 0) {                 // momentum carries out of the dash
+      player.vx = player.dashDir.x * speed * DASH_SPEED_MUL * DASH_VEL_CARRY;
+      player.vy = player.dashDir.y * speed * DASH_SPEED_MUL * DASH_VEL_CARRY;
+    }
   } else {
     const ms = speed * G.playerSlow;            // disruptor fields drag this below 1
-    player.vx = lerp(player.vx, mv.x * ms * mv.mag, 0.2);
-    player.vy = lerp(player.vy, mv.y * ms * mv.mag, 0.2);
+    // quick turn-response (Section F): steer harder the more the input opposes
+    // current velocity — direction changes feel snappy, never ice-skating
+    let resp = MOVE_LERP;
+    const cv = Math.hypot(player.vx, player.vy);
+    if (cv > 40 && mv.mag > 0) {
+      const dot = (player.vx * mv.x + player.vy * mv.y) / cv;
+      if (dot < 0.5) resp = Math.min(1, MOVE_LERP * (1 + TURN_ASSIST * (0.5 - dot)));
+    }
+    player.vx = lerp(player.vx, mv.x * ms * mv.mag, resp);
+    player.vy = lerp(player.vy, mv.y * ms * mv.mag, resp);
   }
   player.x += player.vx * dt; player.y += player.vy * dt;
   const lim = ARENA / 2 - player.r;
@@ -3134,9 +3159,10 @@ function update(dt) {
   updatePickups(dt);
   updateParticles(dt);
 
-  // camera + shake decay
-  G.cam.x = lerp(G.cam.x, player.x, 0.12);
-  G.cam.y = lerp(G.cam.y, player.y, 0.12);
+  // camera + shake decay (smooth lerp, dash punch-in)
+  G.cam.x = lerp(G.cam.x, player.x, CAM_LERP);
+  G.cam.y = lerp(G.cam.y, player.y, CAM_LERP);
+  G.dashZoom = lerp(G.dashZoom, player.dashTime > 0 ? DASH_ZOOM : 0, Math.min(1, 12 * dt));
   G.shake = Math.max(0, G.shake - dt * 1.6);
   if (G.flash > 0) G.flash = Math.max(0, G.flash - dt * 2.4);
   if (G.glitchFX > 0) G.glitchFX = Math.max(0, G.glitchFX - dt * 1.5);
@@ -3194,7 +3220,10 @@ function worldTransform() {
   let sx = 0, sy = 0;
   if (G.shake > 0) { const t = G.shake * G.shake * 16; sx = rand(-t, t); sy = rand(-t, t); }
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  ctx.translate(W / 2 - G.cam.x + sx, H / 2 - G.cam.y + sy);
+  ctx.translate(W / 2, H / 2);
+  const z = 1 + G.dashZoom;            // dash punch-in (Section F)
+  ctx.scale(z, z);
+  ctx.translate(-G.cam.x + sx, -G.cam.y + sy);
 }
 
 function drawGrid() {
@@ -3435,6 +3464,20 @@ function render() {
     else if (p.kind === 'flak') { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(G.time * 8); ctx.fillStyle = YE; star(0, 0, p.r, 4, 0, 0.5); ctx.fill(); ctx.restore(); }
     else { ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.55, 0, TAU); ctx.fill(); }
   }
+  // dash motion trail (Section F): ghost ships fading behind the dash
+  if (G.trail.length) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const g of G.trail) {
+      const a = clamp(g.life / g.max, 0, 1) * 0.5;
+      ctx.save(); ctx.translate(g.x, g.y); ctx.rotate(g.aim); ctx.globalAlpha = a;
+      ctx.fillStyle = rgba(CY, 0.8);
+      ctx.beginPath(); ctx.moveTo(16, 0); ctx.lineTo(-11, 10); ctx.lineTo(-6, 0); ctx.lineTo(-11, -10);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
   // player ship
   if (G.state === 'playing' || G.state === 'paused' || G.state === 'levelup') drawPlayer();
 
@@ -3470,7 +3513,7 @@ function drawPlayer() {
   // dash cooldown ring
   if (player.dashCD > 0) {
     ctx.strokeStyle = rgba(CY, 0.5); ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(player.x, player.y, player.r + 8, -Math.PI / 2, -Math.PI / 2 + (1 - player.dashCD / 1.5) * TAU); ctx.stroke();
+    ctx.beginPath(); ctx.arc(player.x, player.y, player.r + 8, -Math.PI / 2, -Math.PI / 2 + (1 - player.dashCD / DASH_CD) * TAU); ctx.stroke();
   } else {
     ctx.strokeStyle = rgba(YE, 0.7); ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(player.x, player.y, player.r + 8, 0, TAU); ctx.stroke();
@@ -3679,6 +3722,7 @@ function startGame() {
     pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: FIRST_BOSS_AT, bossNum: 0, bossBag: [], bossBanner: null, bossTier: 0,
     dirIntensity: 1, dirStress: 0, dirKps: 0, dirDps: 0, spawnRamp: 1,
     glyphs: {}, sigil: 0, ritual: null, sigilUI: null, lvUnlockAt: null,
+    dashZoom: 0, trail: [],
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });
   enemyId = 1;
