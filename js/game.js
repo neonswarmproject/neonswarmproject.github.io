@@ -533,6 +533,7 @@ function hurtPlayer(dmg) {
   G.hitstop = Math.max(G.hitstop, 0.06);
   sfx('hurt');
   G.combo = 0;
+  G.particles.push({ x: player.x, y: player.y, vx: 0, vy: 0, r: player.r, mr: player.r * 4, life: 0.35, max: 0.35, color: RD, kind: 'ring' });
   for (let i = 0; i < 18; i++)
     spawnParticle(player.x, player.y, rand(-180, 180), rand(-180, 180), rand(0.2, 0.5), rand(2, 4), RD, 'spark');
   if (player.hp <= 0) { player.hp = 0; gameOver(); }
@@ -640,6 +641,9 @@ const WEAPONS = {
           r: 6, dmg, pierce, life: 1.4 * S().projDurMul, color: CY, hit: new Set(), trail: 1
         });
       }
+      // muzzle flash (Section J)
+      for (let i = 0; i < 3; i++)
+        spawnParticle(player.x, player.y, rand(-90, 90), rand(-90, 90), 0.15, 2.5, CY, 'spark');
       sfx('shoot');
     }
   },
@@ -1493,6 +1497,8 @@ function currentEnemyLevel() {
   return clamp(1 + Math.floor((G.time - G.lvUnlockAt) / 60 * ENEMY_LV_PER_MIN), 1, ENEMY_LV_MAX);
 }
 
+const ENEMY_SPAWNIN_T = 0.35;   // s scale/fade-in when an enemy materializes (Section J)
+
 function spawnEnemy(type, x, y, opts) {
   if (G.enemies.length >= MAX_ENEMIES) return null;
   const base = ETYPES[type];
@@ -1503,7 +1509,7 @@ function spawnEnemy(type, x, y, opts) {
     hp: base.hp * d.hp, maxHp: base.hp * d.hp,
     speed: base.speed * d.speed, dmg: base.dmg * d.dmg, xp: base.xp,
     flash: 0, dead: false, slow: 1, fireT: rand(0, 1.5),
-    rot: rand(0, TAU), elite: false, boss: false, spawn: 0.0,
+    rot: rand(0, TAU), elite: false, boss: false, spawn: ENEMY_SPAWNIN_T,
   };
   if (opts) Object.assign(e, opts);
   // Adaptive mercy: when the hidden director says the player is struggling,
@@ -2747,6 +2753,7 @@ function updateEnemies(dt) {
     const e = arr[i];
     if (e.dead) { arr.splice(i, 1); if (e === G.boss) G.boss = null; continue; }
     e.flash = Math.max(0, e.flash - dt * 6);
+    if (e.spawn > 0) e.spawn -= dt;          // materialization timer (Section J)
     e.rot += dt * (e.type === 'orbiter' ? 4 : e.type === 'saw' ? 7 : 1);
 
     // frost slow
@@ -2825,6 +2832,8 @@ function updateEnemyProjectiles(dt) {
       }
     }
     p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+    if (p.kind === 'home' && Math.random() < 0.35 * PERF.fxLevel)   // comet tail (Section J)
+      spawnParticle(p.x, p.y, 0, 0, 0.15, 3, p.color, 'spark');
     if (p.life <= 0 || dist2(p.x, p.y, player.x, player.y) > EBULLET_CULL * EBULLET_CULL) { arr.splice(i, 1); continue; }
     if (dist2(p.x, p.y, player.x, player.y) < (p.r + player.r) ** 2) {
       hurtPlayer(p.dmg);
@@ -3113,6 +3122,10 @@ function addXp(v) {
     G.pendingLevels++;
     sfx('levelup');
     player.hp = Math.min(player.maxHp, player.hp + 8);
+    // level-up flourish (Section J): golden double ring + floater
+    G.particles.push({ x: player.x, y: player.y, vx: 0, vy: 0, r: player.r, mr: 130, life: 0.5, max: 0.5, color: YE, kind: 'ring' });
+    G.particles.push({ x: player.x, y: player.y, vx: 0, vy: 0, r: player.r, mr: 200, life: 0.65, max: 0.65, color: WH, kind: 'ring' });
+    floater(player.x, player.y - 30, 'LEVEL UP', YE, 18);
     for (let i = 0; i < 26; i++) { const a = rand(0, TAU); spawnParticle(player.x, player.y, Math.cos(a) * rand(60, 260), Math.sin(a) * rand(60, 260), rand(0.4, 0.8), rand(2, 4), YE, 'spark'); }
   }
 }
@@ -3413,8 +3426,8 @@ function drawGrid() {
   ctx.globalCompositeOperation = 'source-over';
 }
 
-function drawShapeFor(e) {
-  const r = e.r;
+function drawShapeFor(e, rs) {
+  const r = e.r * (rs || 1);
   switch (e.shape) {
     case 'diamond': poly(e.x, e.y, r, 4, e.rot); break;
     case 'tri':     poly(e.x, e.y, r, 3, e.rot); break;
@@ -3467,12 +3480,15 @@ function render() {
     const g = G.gems[i];
     glow(g.x, g.y, 7, GR, 0.8);
   }
-  // pickups
-  for (const p of G.pickups) { const c = PICKUP_COLOR[p.type] || WH; glow(p.x, p.y, 16 + Math.sin(p.t * 6) * 3, c, 0.9); }
+  // pickups (gentle bob + pulsing glow)
+  for (const p of G.pickups) { const c = PICKUP_COLOR[p.type] || WH; glow(p.x, p.y + Math.sin(p.t * 3) * 3, 16 + Math.sin(p.t * 6) * 3, c, 0.9); }
   // enemy projectiles
   for (const p of G.eProj) glow(p.x, p.y, p.r * 2.2, p.color, p.arm > 0 ? 0.3 : 0.9);
-  // enemy glows
-  for (const e of G.enemies) glow(e.x, e.y, e.r * (e.boss ? 2.2 : 1.9), e.flash > 0.3 ? WH : e.color, e.boss ? 0.8 : 0.6);
+  // enemy glows (spawn-in: glow swells with the materializing body)
+  for (const e of G.enemies) {
+    const sk = e.spawn > 0 ? 1 - clamp(e.spawn / ENEMY_SPAWNIN_T, 0, 1) : 1;
+    glow(e.x, e.y, e.r * (e.boss ? 2.2 : 1.9) * (0.5 + 0.5 * sk), e.flash > 0.3 ? WH : e.color, (e.boss ? 0.8 : 0.6) * (0.3 + 0.7 * sk));
+  }
   // player projectiles
   for (const p of G.pProj) glow(p.x, p.y, p.r * 2.6, p.color, 0.95);
   // weapon-specific glows (orbital blades)
@@ -3539,9 +3555,10 @@ function render() {
   // pickups: hex badge + vector glyph (no fonts -> crisp everywhere)
   for (const p of G.pickups) {
     const c = PICKUP_COLOR[p.type] || WH;
+    const bobY = p.y + Math.sin(p.t * 3) * 3;
     ctx.fillStyle = rgba(c, 0.18); ctx.strokeStyle = c; ctx.lineWidth = 2;
-    poly(p.x, p.y, 13, 6, p.t * 2); ctx.fill(); ctx.stroke();
-    ctx.save(); ctx.translate(p.x, p.y); ctx.strokeStyle = WH; ctx.fillStyle = WH; ctx.lineWidth = 2.4; ctx.lineCap = 'round';
+    poly(p.x, bobY, 13, 6, p.t * 2); ctx.fill(); ctx.stroke();
+    ctx.save(); ctx.translate(p.x, bobY); ctx.strokeStyle = WH; ctx.fillStyle = WH; ctx.lineWidth = 2.4; ctx.lineCap = 'round';
     if (p.type === 'heal') {                 // plus
       ctx.beginPath(); ctx.moveTo(-5, 0); ctx.lineTo(5, 0); ctx.moveTo(0, -5); ctx.lineTo(0, 5); ctx.stroke();
     } else if (p.type === 'magnet') {        // horseshoe magnet
@@ -3589,19 +3606,25 @@ function render() {
       e.bdef.draw(e); continue;
     }
     const phasing = e.type === 'phantom' && e.intangible > 0;
-    if (phasing) ctx.globalAlpha = (e.phState === 'fade') ? clamp(0.25 + 0.7 * (e.ghostA ?? 1), 0.25, 1) : 0.3; // fade-out telegraph, then ghostly
+    // spawn-in (Section J): bodies scale and fade in instead of popping
+    const spawnK = e.spawn > 0 ? 1 - clamp(e.spawn / ENEMY_SPAWNIN_T, 0, 1) : 1;
+    const scaleK = spawnK < 1 ? 0.3 + 0.7 * spawnK : 1;
+    let alpha = 1;
+    if (phasing) alpha = (e.phState === 'fade') ? clamp(0.25 + 0.7 * (e.ghostA ?? 1), 0.25, 1) : 0.3; // fade-out telegraph, then ghostly
+    if (spawnK < 1) alpha *= 0.25 + 0.75 * spawnK;
+    if (alpha < 1) ctx.globalAlpha = alpha;
     ctx.lineWidth = e.boss ? 4 : (e.type === 'juggernaut' ? 3.2 : 2.2);
     ctx.strokeStyle = e.flash > 0.3 ? WH : e.color;
     ctx.fillStyle = e.flash > 0.5 ? rgba(WH, 0.8) : rgba(e.color, e.slow < 1 ? 0.45 : 0.22);
-    drawShapeFor(e); ctx.fill(); ctx.stroke();
-    if (e.slow < 1) { ctx.strokeStyle = rgba('#bff', 0.6); ctx.lineWidth = 1; drawShapeFor(e); ctx.stroke(); }
+    drawShapeFor(e, scaleK); ctx.fill(); ctx.stroke();
+    if (e.slow < 1) { ctx.strokeStyle = rgba('#bff', 0.6); ctx.lineWidth = 1; drawShapeFor(e, scaleK); ctx.stroke(); }
     // shielder: bright frontal shield arc facing the player
     if (e.type === 'shielder') {
       const sa = e.shieldA ?? angTo(e.x, e.y, player.x, player.y);
       ctx.strokeStyle = rgba(BL, 0.9); ctx.lineWidth = 3.5;
       ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 5, sa - SHIELDER_ARC, sa + SHIELDER_ARC); ctx.stroke();
     }
-    if (phasing) ctx.globalAlpha = 1;
+    if (alpha < 1) ctx.globalAlpha = 1;
     // boss / elite / juggernaut health bar
     if (e.boss) { /* drawn in HUD */ }
     else if (e.elite || e.type === 'juggernaut' || (e.maxHp > 60 && e.hp < e.maxHp)) {
@@ -3678,9 +3701,19 @@ function render() {
 function drawPlayer() {
   const blink = player.invuln > 0 && Math.floor(G.time * 20) % 2 === 0;
   if (blink) return;
+  const spd = Math.hypot(player.vx, player.vy);
   ctx.save();
   ctx.translate(player.x, player.y);
   ctx.rotate(player.aim);
+  // animated thruster flame (Section J): grows with speed, white-hot in a dash
+  const flame = clamp(spd / (BASE_SPEED * 2), 0, 1);
+  if (flame > 0.05) {
+    const fl = 8 + 18 * flame + Math.sin(G.time * 40) * 3;
+    ctx.fillStyle = rgba(player.dashTime > 0 ? WH : OR, 0.85);
+    ctx.beginPath(); ctx.moveTo(-8, 4.5); ctx.lineTo(-8 - fl, 0); ctx.lineTo(-8, -4.5); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = rgba(YE, 0.9);
+    ctx.beginPath(); ctx.moveTo(-8, 2.5); ctx.lineTo(-8 - fl * 0.55, 0); ctx.lineTo(-8, -2.5); ctx.closePath(); ctx.fill();
+  }
   ctx.shadowColor = CY; ctx.shadowBlur = 18;
   ctx.fillStyle = rgba(CY, 0.9); ctx.strokeStyle = WH; ctx.lineWidth = 2;
   ctx.beginPath();
@@ -3688,6 +3721,12 @@ function drawPlayer() {
   ctx.closePath(); ctx.fill(); ctx.stroke();
   ctx.shadowBlur = 0;
   ctx.restore();
+  // idle shimmer (Section J): a soft rotating tri-halo while hovering
+  if (spd < 30) {
+    const sh = 0.5 + 0.5 * Math.sin(G.time * 2.4);
+    ctx.strokeStyle = rgba(CY, 0.2 + 0.25 * sh); ctx.lineWidth = 1.5;
+    poly(player.x, player.y, player.r + 5 + sh * 2, 3, player.aim + G.time * 0.8); ctx.stroke();
+  }
   // dash cooldown ring
   if (player.dashCD > 0) {
     ctx.strokeStyle = rgba(CY, 0.5); ctx.lineWidth = 2;
