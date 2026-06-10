@@ -805,7 +805,7 @@ const WEAPONS = {
     info(l) {
       const m = ['Fires a piercing beam of light.',
         'Wider beam.', '+45% damage.', 'Faster firing.',
-        '+1 beam &amp; longer.', '+45% damage.', 'Twin overcharged lances.',
+        '+1 beam &amp; longer.', '+45% damage.', '+1 overcharged lance.',
         'Longer beam.', '+1 lance &amp; faster.', 'Wider beam.', 'Prismatic: +lance &amp; damage.'];
       return m[Math.min(l, m.length - 1)];
     },
@@ -882,7 +882,7 @@ const WEAPONS = {
       const m = ['Hurls a spinning disc that flies out and returns.',
         '+45% damage.', '+1 disc.', 'Bigger disc &amp; pierce.',
         '+45% damage.', '+1 disc.', 'Bigger disc &amp; pierce.',
-        'Faster return &amp; damage.', 'Triple discs of doom.'];
+        'Faster return &amp; damage.', 'A fourth disc of doom.'];
       return m[Math.min(l, m.length - 1)];
     },
     update(self, dt) {
@@ -1061,7 +1061,7 @@ const WEAPONS = {
     info(l) {
       const m = ['Lashes a melee arc in your facing direction.',
         '+damage.', 'Wider arc.', '+range.',
-        '+damage.', 'Faster &amp; wider.', '+range.',
+        '+damage &amp; faster.', 'Wider arc.', '+range.',
         '+damage.', 'Double swipe (front &amp; back).'];
       return m[Math.min(l, m.length - 1)];
     },
@@ -1160,7 +1160,7 @@ const WEAPONS = {
     update(self, dt) {
       const lv = self.level;
       self.t = (self.t || 0) - dt;
-      const cd = (1.5 - (lv >= 4 ? 0.4 : 0) - (lv >= 8 ? 0.3 : 0)) / S().attackSpeedMul;
+      const cd = (1.5 - (lv >= 4 ? 0.4 : 0) - (lv >= 7 ? 0.3 : 0)) / S().attackSpeedMul;   // lv7 card says "Faster storm" — now true (was a dead level)
       if (self.t > 0) return;
       self.t = cd;
       const strikes = 1 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 2 : 0) + (lv >= 8 ? 2 : 0);
@@ -1361,8 +1361,12 @@ const CARD_VARIETY_LEVELS = 6;
 const CARD_NEW_WEAPON_LEVELS = 4;
 
 function cardData(c) {
-  if (c.kind === 'weapon-new') { const d = WEAPONS[c.id]; return { icon: d.icon, name: d.name, color: d.color, type: 'New Weapon', desc: d.info(1), level: 0, max: d.max, isNew: true }; }
-  if (c.kind === 'weapon-up')  { const d = WEAPONS[c.id]; const w = player.weapons.find(w => w.id === c.id); return { icon: d.icon, name: d.name, color: d.color, type: 'Weapon · Lv ' + (w.level + 1), desc: d.info(w.level + 1), level: w.level, max: d.max }; }
+  // info() arrays are authored as m[newLevel-1] ("what reaching level N gives"),
+  // so pass newLevel-1. v1.x passed newLevel — every weapon card described the
+  // NEXT level's bonus (the reported "card claims an extra ball, levels only
+  // add area" bug). Fixed in v2.
+  if (c.kind === 'weapon-new') { const d = WEAPONS[c.id]; return { icon: d.icon, name: d.name, color: d.color, type: 'New Weapon', desc: d.info(0), level: 0, max: d.max, isNew: true }; }
+  if (c.kind === 'weapon-up')  { const d = WEAPONS[c.id]; const w = player.weapons.find(w => w.id === c.id); return { icon: d.icon, name: d.name, color: d.color, type: 'Weapon · Lv ' + (w.level + 1), desc: d.info(w.level), level: w.level, max: d.max }; }
   if (c.kind === 'passive')    { const d = PASSIVES[c.id]; const lv = player.passives[c.id] || 0; return { icon: d.icon, name: d.name, color: d.color, type: 'Passive · Lv ' + (lv + 1), desc: d.desc, level: lv, max: d.max }; }
   return { icon: '✨', name: 'Power Surge', color: WH, type: 'Bonus', desc: '+8% damage &amp; full heal.', level: 0, max: 0 };
 }
