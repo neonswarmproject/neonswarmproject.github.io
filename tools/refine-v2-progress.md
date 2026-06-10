@@ -40,20 +40,35 @@ for every tunable. Zero console errors desktop + mobile.
 - [x] H — Focus target: G.focusTarget, click/tap creature to focus (toggle /
       switch), auto-aim weapons prefer focus, tap-vs-drag thresholds on
       mobile, subtle reticle
-- [ ] I — Adaptive performance: device-tier startup budget
+- [x] I — Adaptive performance: device-tier startup budget
       (hardwareConcurrency/deviceMemory/DPR), rolling-FPS runtime adjustment
       of particle/glow/telegraph budgets, no per-frame allocations
-- [ ] J — Animations everywhere: player (idle/thruster/dash/hurt/level-up),
+- [x] J — Animations everywhere: player (idle/thruster/dash/hurt/level-up),
       weapons (fire/impact), enemies (spawn-in/death), bosses (already in C2);
       readability sacred — enemy fire visually distinct
-- [ ] K — Bug sweep: weapon info() vs update() audits (purple AoE projectile
-      claim), collision edge cases, off-screen cleanup, pause/resume, HUD
-      correctness, zero console warnings
-- [ ] L — Free improvements: first-run hint, directional damage indicator,
-      "boss incoming" banner, results screen
-- [ ] FINAL — serve locally, open browser preview tab, desktop+mobile-viewport
-      Playwright smoke test (no console errors), write test checklist, set
-      STATUS: AWAITING-HUMAN
+- [x] K — Bug sweep: weapon info() vs update() audits (off-by-one in ALL
+      weapon cards found & fixed + 4 per-weapon text/threshold mismatches),
+      collision edge cases, off-screen cleanup, pause/resume, HUD correctness
+- [x] L — Free improvements: first-run hint, directional damage indicator,
+      "boss incoming" banner (in C1), results screen "% of best" row
+- [ ] FINAL — in this exact order:
+      1. Re-run the adversarial review (the first run died on the usage
+         limit with ZERO findings produced — do NOT trust that empty result).
+         Either re-launch the review workflow over `git diff main...refine/v2`
+         or review the diff directly for: runtime errors, boot-order/TDZ
+         issues, state-reset gaps (G literal vs startGame), canvas state
+         leaks, multi-touch Map leaks, camZoom math errors. Fix + commit.
+      2. Playwright smoke test on http://localhost:8123 (server may already
+         be running; restart with `python3 -m http.server 8123` if not):
+         load → zero console errors → click PLAY → set NEON.G.time = 44 via
+         evaluate → boss spawns (sweep + banner + entrance) → teleport boss
+         near player, let it die → ~5 level-ups paid out, farm window opens.
+         Also test at 390x844 viewport. Fix anything broken + commit.
+      3. Bump in-game VERSION const to '2.0-rc1' (NOT 2.0 — that happens at
+         release), commit.
+      4. `open http://localhost:8123` to put the preview in a browser tab.
+      5. Write the human test checklist at the bottom of this file, set
+         STATUS: AWAITING-HUMAN at the top, print OVERNIGHT-DONE, stop.
 
 ## After human confirmation ONLY
 merge refine/v2 → main, push to `neon` remote, bump VERSION to v2.0,
