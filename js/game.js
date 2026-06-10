@@ -1465,8 +1465,9 @@ function countType(t) { let n = 0; for (const e of G.enemies) if (e.type === t &
 // so the enemy cap can never block the boss itself.
 function bossSweepArena(x, y, color) {
   let swept = 0;
+  const keep = [];
   for (const o of G.enemies) {
-    if (o.boss || o.dead) continue;
+    if (o.boss || o.dead) { keep.push(o); continue; }
     o.dead = true; swept++;
     G.particles.push({ x: o.x, y: o.y, vx: 0, vy: 0, r: 4, mr: o.r * 3, life: 0.5, max: 0.5, color: o.color, kind: 'ring' });
     for (let i = 0; i < 6; i++) {
@@ -1474,6 +1475,10 @@ function bossSweepArena(x, y, color) {
       spawnParticle(o.x, o.y, Math.cos(a) * s, Math.sin(a) * s, rand(0.3, 0.7), rand(2, 4), o.color, 'spark');
     }
   }
+  // remove swept enemies NOW (same array object) so the enemy cap can never
+  // block the boss spawn that follows
+  G.enemies.length = 0;
+  for (const o of keep) G.enemies.push(o);
   G.eProj.length = 0;
   for (let k = 0; k < 3; k++)
     G.particles.push({ x, y, vx: 0, vy: 0, r: 40, mr: 900 + k * 350, life: 0.7 + k * 0.15, max: 0.7 + k * 0.15, color: k % 2 ? WH : color, kind: 'ring' });
@@ -1504,7 +1509,9 @@ function spawnBoss(forcedId) {
     xp: 60 + G.bossNum * 20,
     name: def.name + (G.bossTier > 0 ? ' ' + romanize(G.bossTier + 1) : ''),
     bdef: def, data: {}, phase: 0, suppressSpawns: true,   // v2: every boss owns the arena
+    entrance: BOSS_ENTRANCE_T, phasePause: 0,
   });
+  addTelegraph({ kind: 'zone', x: p.x, y: p.y, r: def.r * 2.2, dur: BOSS_ENTRANCE_T, color: def.color });
   G.boss = e;
   G.bossNum++;
   G.bossBanner = { name: e.name, life: BOSS_BANNER_T, max: BOSS_BANNER_T };
@@ -1522,7 +1529,16 @@ function updateBoss(e, dt) {
   for (const t of e.bdef.phaseThresholds) if (fr <= t) ph++;
   if (ph > e.phase) {
     e.phase = ph; e.flash = 1;
-    G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: e.r * 4, life: 0.6, max: 0.6, color: e.color, kind: 'ring' });
+    // cinematic transition: bullet wipe (readable reset), multi-ring burst,
+    // radial sparks, hitstop, and a short attack pause before the new phase
+    G.eProj.length = 0;
+    e.phasePause = Math.max(e.phasePause || 0, BOSS_PHASE_PAUSE);
+    G.hitstop = Math.max(G.hitstop, BOSS_PHASE_HITSTOP);
+    for (let k = 0; k < 3; k++)
+      G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: e.r * (3 + k * 2), life: 0.5 + k * 0.12, max: 0.5 + k * 0.12, color: k % 2 ? WH : e.color, kind: 'ring' });
+    for (let k = 0; k < 26; k++) { const a = k / 26 * TAU; spawnParticle(e.x, e.y, Math.cos(a) * rand(150, 420), Math.sin(a) * rand(150, 420), rand(0.4, 0.8), rand(2, 5), e.color, 'spark'); }
+    floater(e.x, e.y - e.r - 26, 'PHASE ' + (e.phase + 1), e.color, 22);
+    G.flash = Math.max(G.flash, 0.3); G.flashColor = e.color;
     sfx('boss'); G.shake = Math.min(1, G.shake + BOSS_PHASE_SHAKE);
     if (e.bdef.onPhase) e.bdef.onPhase(e, e.phase);
   }
@@ -1537,19 +1553,41 @@ const GLITCH_TP_CD = 2.6, GLITCH_BEAM_CD = 4, GLITCH_BEAM_TELE = 0.8, GLITCH_BEA
 const CONDUCTOR_BEAT = 0.476, CONDUCTOR_DROP_BARS = 4, CONDUCTOR_DROP_R = 280, CONDUCTOR_BSPD = 200;
 const WARDEN_PULL = 78, WARDEN_PULL_R = 540, WARDEN_SPIRAL_GAP = 0.13, WARDEN_SPIRAL_SPD = 160, WARDEN_IMP_CD = 8, WARDEN_IMP_R = 360, WARDEN_WELL_CD = 7, WARDEN_WELL_DUR = 4, WARDEN_WELL_R = 190, WARDEN_WELL_PULL = 120;
 
+/* ---- v2 epic-ness (Section C2): entrances, phase cinematics, new attacks ---- */
+const BOSS_ENTRANCE_T = 1.6;       // s materialization (invulnerable, no attacks)
+const BOSS_PHASE_HITSTOP = 0.18;   // s frozen time on a phase transition
+const BOSS_PHASE_PAUSE = 0.6;      // s of attack silence after a transition
+const OVL_COMET_CD = 4.2, OVL_COMET_N = 5, OVL_COMET_SPD = 240;
+const OVL_LASER_CD = 7, OVL_LASER_TELE = 0.9, OVL_LASER_DUR = 2.2, OVL_LASER_N = 3, OVL_LASER_W = 20, OVL_LASER_SWEEP = 0.45, OVL_LASER_LEN = 1200;
+const PRISM_RAIN_CD = 4.5, PRISM_RAIN_N = 7, PRISM_RAIN_SPD = 330, PRISM_RAIN_TELE = 0.55;
+const HIVE_FRENZY_CD = 6, HIVE_FRENZY_T = 2.5, HIVE_FRENZY_MUL = 1.8, HIVE_EGG_SPREAD = 0.5;
+const GLITCH_CORRUPT_CD = 5, GLITCH_CORRUPT_N = 4, GLITCH_CORRUPT_R = 110, GLITCH_CORRUPT_TELE = 0.9;
+const COND_GAPRING_SPD = 180, COND_GAPRING_N = 36, COND_GAPRING_GAP = 5;
+const WARDEN_LANCE_CD = 5, WARDEN_LANCE_N = 3, WARDEN_LANCE_TELE = 0.7, WARDEN_LANCE_SPD = 520;
+
 const BOSSES = {
   /* ---- SLOT 0: OVERLORD (intro) ---- */
   overlord: {
     id: 'overlord', name: 'OVERLORD', color: WH, r: 58, speed: 44, hpMul: 1.0,
-    drop: 'heal', phaseThresholds: [0.5],
+    drop: 'heal', phaseThresholds: [0.66, 0.33],
     update(e, dt) {
-      const d = e.data, p2 = e.phase >= 1;
+      const d = e.data, p2 = e.phase >= 1, p3 = e.phase >= 2;
       d.fireT = (d.fireT ?? OVL_FIRE) - dt;
       if (d.fireT <= 0) {
         d.fireT = p2 ? OVL_FIRE2 : OVL_FIRE;
         bossRing(e, OVL_RINGN, OVL_BSPD, B_BULLET, e.rot, p2 ? MA : WH);
         if (p2) bossRing(e, OVL_RINGN, OVL_BSPD, B_BULLET, e.rot + Math.PI / OVL_RINGN, MA); // double ring
         G.shake = Math.min(1, G.shake + 0.05);
+      }
+      // comet volley: a telegraphed fan of gently-homing comets at the player
+      d.cometT = (d.cometT ?? OVL_COMET_CD) - dt;
+      if (d.cometT <= 0) {
+        d.cometT = OVL_COMET_CD; e.flash = 1;
+        const base = angTo(e.x, e.y, player.x, player.y);
+        for (let k = 0; k < OVL_COMET_N; k++) {
+          const a = base + (k - (OVL_COMET_N - 1) / 2) * 0.16;
+          spawnEnemyProjectile(e.x, e.y, Math.cos(a) * OVL_COMET_SPD, Math.sin(a) * OVL_COMET_SPD, e.dmg * B_BULLET, MA, { kind: 'home', turn: 0.9, life: 3.2, r: 8, arm: 0.25 });
+        }
       }
       d.summonT = (d.summonT ?? OVL_SUMMON_CD) - dt;
       if (d.summonT <= 0) {
@@ -1566,16 +1604,49 @@ const BOSSES = {
           if (d.spEmit <= 0) { d.spEmit = OVL_SPIRAL_GAP; d.spAng = (d.spAng || 0) + 0.4; spawnEnemyProjectile(e.x, e.y, Math.cos(d.spAng) * OVL_SPIRAL_SPD, Math.sin(d.spAng) * OVL_SPIRAL_SPD, e.dmg * B_BULLET, MA); }
         }
       }
+      // phase 3 — CROWN LASERS: a telegraphed rotating tri-beam sweep
+      if (p3) {
+        if (d.lzState === undefined) { d.lzState = 'idle'; d.lzCD = OVL_LASER_CD * 0.5; }
+        if (d.lzState === 'idle') {
+          d.lzCD -= dt;
+          if (d.lzCD <= 0) {
+            d.lzState = 'tele'; d.lzT = OVL_LASER_TELE; d.lzAng = angTo(e.x, e.y, player.x, player.y);
+            for (let k = 0; k < OVL_LASER_N; k++)
+              addTelegraph({ kind: 'line', x: e.x, y: e.y, a: d.lzAng + k / OVL_LASER_N * TAU, len: OVL_LASER_LEN, w: 9, dur: OVL_LASER_TELE, color: MA });
+          }
+        } else if (d.lzState === 'tele') {
+          d.lzT -= dt; if (d.lzT <= 0) { d.lzState = 'fire'; d.lzT = OVL_LASER_DUR; }
+        } else {
+          d.lzT -= dt; d.lzAng += OVL_LASER_SWEEP * dt;
+          for (let k = 0; k < OVL_LASER_N; k++) {
+            const a = d.lzAng + k / OVL_LASER_N * TAU;
+            const ex = e.x + Math.cos(a) * OVL_LASER_LEN, ey = e.y + Math.sin(a) * OVL_LASER_LEN;
+            G.beams.push({ x1: e.x, y1: e.y, x2: ex, y2: ey, w: OVL_LASER_W, life: 0.05, max: 0.05, color: MA });
+            if (segDist(e.x, e.y, ex, ey, player.x, player.y) < OVL_LASER_W / 2 + player.r) hurtPlayer(e.dmg * B_BEAM);
+          }
+          if (d.lzT <= 0) { d.lzState = 'idle'; d.lzCD = OVL_LASER_CD; }
+        }
+      }
     },
     draw(e) {
-      const c2 = e.phase >= 1 ? MA : WH;
+      const c2 = e.phase >= 2 ? MA : e.phase >= 1 ? PK : WH;
       glow(e.x, e.y, e.r * 1.7, c2, 0.7);
+      // orbiting crown shards (the lasers fire from these in phase 3)
+      for (let k = 0; k < 6; k++) {
+        const a = G.time * 0.9 + k / 6 * TAU, rr = e.r * 1.35 + Math.sin(G.time * 3 + k) * 6;
+        const sx = e.x + Math.cos(a) * rr, sy = e.y + Math.sin(a) * rr;
+        ctx.strokeStyle = rgba(c2, 0.85); ctx.lineWidth = 2;
+        poly(sx, sy, 9, 3, a + Math.PI / 2); ctx.stroke();
+        glow(sx, sy, 7, c2, 0.5);
+      }
       ctx.fillStyle = rgba(c2, 0.16); ctx.strokeStyle = rgba(WH, 0.95); ctx.lineWidth = 4;
       star(e.x, e.y, e.r, 6, e.rot, 0.6); ctx.fill(); ctx.stroke();
       const pulse = 1 + 0.08 * Math.sin(G.time * 5);
       ctx.strokeStyle = rgba(c2, 0.9); ctx.lineWidth = 3;
       poly(e.x, e.y, e.r * 0.45 * pulse, 6, -e.rot * 1.6); ctx.stroke();
-      glow(e.x, e.y, e.r * 0.3, WH, 0.9);
+      ctx.strokeStyle = rgba(WH, 0.5); ctx.lineWidth = 2;       // counter-rotating hexagram
+      star(e.x, e.y, e.r * 0.72, 6, e.rot * 0.5 + 0.5, 0.5); ctx.stroke();
+      glow(e.x, e.y, e.r * 0.3 * pulse, WH, 0.9);
     },
   },
 
@@ -1611,6 +1682,17 @@ const BOSSES = {
           for (let k = -2; k <= 2; k++) { const a = base + k * 0.12; spawnEnemyProjectile(e.x, e.y, Math.cos(a) * PRISM_BSPD, Math.sin(a) * PRISM_BSPD, e.dmg * B_BULLET, cols[f], { kind: 'home', turn: 1.1, life: 3 }); }
         }
       }
+      // phase 2+ — chromatic shard rain (telegraphed falling squares)
+      if (e.phase >= 1) {
+        d.rainCD = (d.rainCD ?? PRISM_RAIN_CD) - dt;
+        if (d.rainCD <= 0) {
+          d.rainCD = PRISM_RAIN_CD;
+          for (let k = 0; k < PRISM_RAIN_N; k++) {
+            const px = player.x + rand(-360, 360);
+            spawnEnemyProjectile(px, player.y - rand(380, 520), 0, PRISM_RAIN_SPD, e.dmg * B_BULLET, cols[k % 3], { kind: 'square', r: 8, arm: PRISM_RAIN_TELE, life: 5 });
+          }
+        }
+      }
       // phase 3 — mirror clones
       if (e.phase >= 2) {
         d.cloneCD = (d.cloneCD ?? PRISM_CLONE_CD) - dt;
@@ -1625,6 +1707,9 @@ const BOSSES = {
         }
       }
     },
+    onPhase(e) {       // refraction nova punctuates every phase transition
+      bossRing(e, 18 + e.phase * 6, 200, B_BULLET, rand(0, TAU), [CY, MA, YE][e.phase % 3]);
+    },
     draw(e) {
       glow(e.x, e.y, e.r * 1.5, WH, 0.55);
       ctx.fillStyle = rgba(WH, 0.12); ctx.strokeStyle = rgba(WH, 0.95); ctx.lineWidth = 4;
@@ -1632,6 +1717,13 @@ const BOSSES = {
       glow(e.x, e.y, e.r * 0.4, WH, 0.95);
       const cols = [CY, MA, YE];
       for (let k = 0; k < 3; k++) { const a = e.rot + k / 3 * TAU, vx = e.x + Math.cos(a) * e.r * 0.92, vy = e.y + Math.sin(a) * e.r * 0.92, lit = (Math.floor(G.time * 3) % 3) === k; glow(vx, vy, lit ? 13 : 7, cols[k], lit ? 1 : 0.55); }
+      // refraction halo: counter-rotating outer triad + colored light nodes
+      ctx.strokeStyle = rgba(CY, 0.3); ctx.lineWidth = 2;
+      poly(e.x, e.y, e.r * 1.5, 3, -e.rot * 0.7); ctx.stroke();
+      for (let k = 0; k < 3; k++) {
+        const a = -e.rot * 0.7 + k / 3 * TAU + Math.PI / 2;
+        glow(e.x + Math.cos(a) * e.r * 1.5, e.y + Math.sin(a) * e.r * 1.5, 6, cols[k], 0.6);
+      }
       if (e.data.clones) for (const cl of e.data.clones) { ctx.fillStyle = rgba(CY, 0.10); ctx.strokeStyle = rgba(WH, 0.5); ctx.lineWidth = 2; poly(cl.x, cl.y, e.r * 0.7, 3, e.rot); ctx.fill(); ctx.stroke(); }
     },
   },
@@ -1639,7 +1731,7 @@ const BOSSES = {
   /* ---- SLOT 2: THE HIVE — Dronemother (the spawner) ---- */
   hive: {
     id: 'hive', name: 'THE HIVE', color: GR, r: 58, speed: 34, hpMul: 1.15,
-    drop: 'nectar', phaseThresholds: [0.5],
+    drop: 'nectar', phaseThresholds: [0.6, 0.3],
     update(e, dt) {
       const d = e.data, p2 = e.phase >= 1;
       d.droneCD = (d.droneCD ?? HIVE_DRONE_CD) - dt;
@@ -1661,8 +1753,21 @@ const BOSSES = {
       d.eggCD = (d.eggCD ?? HIVE_EGG_CD) - dt;
       if (d.eggCD <= 0) {
         d.eggCD = HIVE_EGG_CD;
-        const a = angTo(e.x, e.y, player.x, player.y) + rand(-0.4, 0.4);
-        spawnEnemyProjectile(e.x, e.y, Math.cos(a) * 95, Math.sin(a) * 95, e.dmg * B_BULLET, GR, { kind: 'egg', hatch: 1.5, hatchN: randi(6, 8), r: 11, life: 6 });
+        const base = angTo(e.x, e.y, player.x, player.y) + rand(-0.4, 0.4);
+        const eggs = 1 + (p2 ? 2 : 0);                       // phase 2: a spread of three
+        for (let k = 0; k < eggs; k++) {
+          const a = base + (k - (eggs - 1) / 2) * HIVE_EGG_SPREAD;
+          spawnEnemyProjectile(e.x, e.y, Math.cos(a) * 95, Math.sin(a) * 95, e.dmg * B_BULLET, GR, { kind: 'egg', hatch: 1.5, hatchN: randi(6, 8), r: 11, life: 6 });
+        }
+      }
+      // phase 3 — pheromone frenzy: a pulse that whips every drone into a rush
+      if (e.phase >= 2) {
+        d.frzCD = (d.frzCD ?? HIVE_FRENZY_CD) - dt;
+        if (d.frzCD <= 0) {
+          d.frzCD = HIVE_FRENZY_CD; e.flash = 1;
+          G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: 700, life: 0.6, max: 0.6, color: YE, kind: 'ring' });
+          for (const o of G.enemies) if (!o.dead && o.type === 'mini') { o.frenzy = HIVE_FRENZY_T; o.flash = Math.max(o.flash, 0.5); }
+        }
       }
     },
     draw(e) {
@@ -1673,6 +1778,11 @@ const BOSSES = {
       ctx.lineWidth = 1.5; ctx.strokeStyle = rgba(YE, 0.5);
       for (let k = 0; k < 6; k++) { const a = e.rot * 0.2 + k / 6 * TAU, cx = e.x + Math.cos(a) * e.r * 0.5, cy = e.y + Math.sin(a) * e.r * 0.5; poly(cx, cy, e.r * 0.22, 6, e.rot * 0.2); ctx.stroke(); }
       glow(e.x, e.y, e.r * 0.32 * breathe, YE, 0.9);
+      // larvae glints pulsing inside the comb cells
+      for (let k = 0; k < 6; k++) {
+        const a = e.rot * 0.2 + k / 6 * TAU, cx = e.x + Math.cos(a) * e.r * 0.5, cy = e.y + Math.sin(a) * e.r * 0.5;
+        glow(cx, cy, 4 + 2 * Math.sin(G.time * 5 + k * 1.7), GR, 0.55);
+      }
     },
   },
 
@@ -1702,6 +1812,26 @@ const BOSSES = {
       // ERROR rain
       d.rainCD = (d.rainCD ?? GLITCH_RAIN_CD) - dt;
       if (d.rainCD <= 0) { d.rainCD = GLITCH_RAIN_CD; const n = randi(5, 8); for (let k = 0; k < n; k++) { const px = player.x + rand(-320, 320); spawnEnemyProjectile(px, player.y - 440, 0, GLITCH_RAIN_SPD, e.dmg * B_BULLET, CY, { kind: 'square', r: 8, arm: GLITCH_RAIN_TELE, life: 5 }); } }
+      // phase 2 — corrupted sectors: telegraphed zones that violently recompile
+      if (p2) {
+        d.corCD = (d.corCD ?? GLITCH_CORRUPT_CD) - dt;
+        if (d.corCD <= 0) {
+          d.corCD = GLITCH_CORRUPT_CD; d.corZones = d.corZones || [];
+          for (let k = 0; k < GLITCH_CORRUPT_N; k++) {
+            const zx = player.x + rand(-300, 300), zy = player.y + rand(-300, 300);
+            d.corZones.push({ x: zx, y: zy, t: GLITCH_CORRUPT_TELE });
+            addTelegraph({ kind: 'zone', x: zx, y: zy, r: GLITCH_CORRUPT_R, dur: GLITCH_CORRUPT_TELE, color: YE });
+          }
+        }
+      }
+      if (d.corZones) for (let i = d.corZones.length - 1; i >= 0; i--) {
+        const z = d.corZones[i]; z.t -= dt;
+        if (z.t <= 0) {
+          explodeAt(z.x, z.y, GLITCH_CORRUPT_R, YE);
+          if (dist(z.x, z.y, player.x, player.y) < GLITCH_CORRUPT_R + player.r) hurtPlayer(e.dmg * B_BULLET);
+          d.corZones.splice(i, 1);
+        }
+      }
       // phase 2 — glitch hiccup (mostly visual; brief, telegraphed, rare)
       if (p2) { d.hicCD = (d.hicCD ?? GLITCH_HIC_CD) - dt; if (d.hicCD <= 0) { d.hicCD = GLITCH_HIC_CD; G.glitchFX = 1; G.inputHiccup = 0.3; } }
     },
@@ -1719,6 +1849,10 @@ const BOSSES = {
       ctx.strokeStyle = rgba(MA, 0.8); poly(e.x + off, e.y + j, e.r, 4, e.rot); ctx.stroke();
       ctx.strokeStyle = rgba(YE, 0.7); poly(e.x, e.y - off, e.r, 4, e.rot); ctx.stroke();
       ctx.fillStyle = rgba('#05030f', 0.6); poly(e.x, e.y, e.r * 0.8, 4, e.rot); ctx.fill();
+      if (Math.random() < 0.2) {              // datamosh slice across the body
+        ctx.fillStyle = rgba('#05030f', 0.8);
+        ctx.fillRect(e.x - e.r * 1.4, e.y + rand(-e.r, e.r), e.r * 2.8, rand(2, 7));
+      }
       glow(e.x, e.y, e.r * 0.6, WH, 0.4);
     },
   },
@@ -1730,7 +1864,23 @@ const BOSSES = {
     update(e, dt) {
       const d = e.data;
       if (d.beat === undefined) { d.beat = 0; d.beatT = 0; d.bars = 0; }
-      if (d.dropPending > 0) { d.dropPending -= dt; if (d.dropPending <= 0) { bossRing(e, 40, 230, B_NOVA, rand(0, TAU), MA); G.shake = Math.min(1, G.shake + 0.35); if (Sound) Sound.setIntensity(1); } }
+      if (d.dropPending > 0) {
+        d.dropPending -= dt;
+        if (d.dropPending <= 0) {
+          bossRing(e, 40, 230, B_NOVA, rand(0, TAU), MA);
+          // phase 2+: a slower crescendo ring with ONE safe gap to thread
+          if (e.phase >= 1) {
+            const gap = (Math.random() * COND_GAPRING_N) | 0;
+            for (let k = 0; k < COND_GAPRING_N; k++) {
+              if ((k - gap + COND_GAPRING_N) % COND_GAPRING_N < COND_GAPRING_GAP) continue;
+              const a = k / COND_GAPRING_N * TAU;
+              spawnEnemyProjectile(e.x, e.y, Math.cos(a) * COND_GAPRING_SPD, Math.sin(a) * COND_GAPRING_SPD, e.dmg * B_BULLET, YE, { r: 8 });
+            }
+          }
+          G.shake = Math.min(1, G.shake + 0.35);
+          if (Sound) Sound.setIntensity(1);
+        }
+      }
       d.beatT -= dt;
       if (d.beatT <= 0) {
         d.beatT += CONDUCTOR_BEAT / (1 + e.phase * 0.12); d.beat++; e.flash = 0.6;
@@ -1749,6 +1899,17 @@ const BOSSES = {
       const bars = 24;
       for (let k = 0; k < bars; k++) { const a = k / bars * TAU + e.rot * 0.3, h = e.r * 0.5 + e.r * 0.7 * Math.abs(Math.sin(G.time * 6 + k * 0.5)) * (0.5 + beatPhase * 0.5); const x1 = e.x + Math.cos(a) * e.r * 0.8, y1 = e.y + Math.sin(a) * e.r * 0.8, x2 = e.x + Math.cos(a) * (e.r * 0.8 + h), y2 = e.y + Math.sin(a) * (e.r * 0.8 + h); ctx.strokeStyle = rgba(k % 2 ? MA : CY, 0.8); ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
       glow(e.x, e.y, e.r * 0.3 * (1 + 0.25 * beatPhase), MA, 0.95);
+      if (beatPhase > 0.82) {                  // beat-synced light rays
+        ctx.strokeStyle = rgba(WH, (beatPhase - 0.82) * 3);
+        ctx.lineWidth = 2;
+        for (let k = 0; k < 4; k++) {
+          const a = e.rot * 0.3 + k / 4 * TAU + Math.PI / 4;
+          ctx.beginPath();
+          ctx.moveTo(e.x + Math.cos(a) * e.r * 1.1, e.y + Math.sin(a) * e.r * 1.1);
+          ctx.lineTo(e.x + Math.cos(a) * e.r * 2.4, e.y + Math.sin(a) * e.r * 2.4);
+          ctx.stroke();
+        }
+      }
     },
   },
 
@@ -1774,6 +1935,27 @@ const BOSSES = {
         if (d.wellCD <= 0 && (!d.wells || d.wells.length === 0)) { d.wellCD = WARDEN_WELL_CD; d.wells = []; const n = randi(2, 3); for (let k = 0; k < n; k++) { const a = rand(0, TAU), r = rand(160, 300), wlim = ARENA / 2 - 40, wx = clamp(player.x + Math.cos(a) * r, -wlim, wlim), wy = clamp(player.y + Math.sin(a) * r, -wlim, wlim); d.wells.push({ x: wx, y: wy, t: WARDEN_WELL_DUR, fireT: rand(0, 0.5) }); addTelegraph({ kind: 'zone', x: wx, y: wy, r: 80, dur: 0.8, color: PU }); } }
         if (d.wells) for (let i = d.wells.length - 1; i >= 0; i--) { const w = d.wells[i]; w.t -= dt; const wa = angTo(player.x, player.y, w.x, w.y), wd = dist(player.x, player.y, w.x, w.y); if (wd < WARDEN_WELL_R && wd > 30) { player.x = clamp(player.x + Math.cos(wa) * WARDEN_WELL_PULL * dt, -lim, lim); player.y = clamp(player.y + Math.sin(wa) * WARDEN_WELL_PULL * dt, -lim, lim); } w.fireT -= dt; if (w.fireT <= 0) { w.fireT = 0.7; bossRing({ x: w.x, y: w.y, dmg: e.dmg }, 6, 140, B_BULLET, rand(0, TAU), PU); } if (w.t <= 0) d.wells.splice(i, 1); }
       }
+      // phase 3 — graviton lances: telegraphed triple piercing shots
+      if (e.phase >= 2) {
+        if (d.lanceState === undefined) { d.lanceState = 'idle'; d.lanceCD = WARDEN_LANCE_CD; }
+        if (d.lanceState === 'idle') {
+          d.lanceCD -= dt;
+          if (d.lanceCD <= 0) {
+            d.lanceState = 'tele'; d.lanceT = WARDEN_LANCE_TELE; d.lanceA = angTo(e.x, e.y, player.x, player.y);
+            for (let k = 0; k < WARDEN_LANCE_N; k++)
+              addTelegraph({ kind: 'line', x: e.x, y: e.y, a: d.lanceA + (k - 1) * 0.18, len: 1100, w: 8, dur: WARDEN_LANCE_TELE, color: PK });
+          }
+        } else {
+          d.lanceT -= dt;
+          if (d.lanceT <= 0) {
+            d.lanceState = 'idle'; d.lanceCD = WARDEN_LANCE_CD; e.flash = 1;
+            for (let k = 0; k < WARDEN_LANCE_N; k++) {
+              const a = d.lanceA + (k - 1) * 0.18;
+              spawnEnemyProjectile(e.x, e.y, Math.cos(a) * WARDEN_LANCE_SPD, Math.sin(a) * WARDEN_LANCE_SPD, e.dmg * B_BULLET, PK, { r: 9, life: 3 });
+            }
+          }
+        }
+      }
     },
     draw(e) {
       glow(e.x, e.y, e.r * 1.2, PU, 0.5);
@@ -1781,6 +1963,10 @@ const BOSSES = {
       for (let k = 0; k < 3; k++) { const rr = e.r * (0.6 + k * 0.28); ctx.strokeStyle = rgba(k % 2 ? PU : BL, 0.7); ctx.lineWidth = 3; ctx.beginPath(); for (let s = 0; s <= 24; s++) { const a = e.rot * (1 + k * 0.3) + s / 24 * TAU, x = e.x + Math.cos(a) * rr, y = e.y + Math.sin(a) * rr; if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); } ctx.stroke(); }
       ctx.fillStyle = rgba('#05030f', 0.92); ctx.beginPath(); ctx.arc(e.x, e.y, e.r * 0.5, 0, TAU); ctx.fill();
       glow(e.x, e.y, e.r * 0.3, PU, 0.85);
+      for (let k = 0; k < 8; k++) {            // orbiting debris shards
+        const a = G.time * 1.4 + k / 8 * TAU, rr = e.r * 1.55 + Math.sin(G.time * 2.2 + k) * 8;
+        glow(e.x + Math.cos(a) * rr, e.y + Math.sin(a) * rr, 5, k % 2 ? BL : PU, 0.6);
+      }
       if (e.data.wells) for (const w of e.data.wells) { glow(w.x, w.y, 20, PU, 0.7); ctx.strokeStyle = rgba(BL, 0.5); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(w.x, w.y, WARDEN_WELL_R, 0, TAU); ctx.stroke(); ctx.fillStyle = rgba('#05030f', 0.85); ctx.beginPath(); ctx.arc(w.x, w.y, 10, 0, TAU); ctx.fill(); }
     },
   },
@@ -1850,6 +2036,21 @@ const EBEHAVIOR = {
   },
   boss: {
     move(e, c, dt) {
+      if (e.entrance > 0) {                  // materialization: hold position, no brain
+        e.entrance -= dt; c.sp = 0;
+        if (Math.random() < 0.6) {           // particles implode toward the forming body
+          const a = rand(0, TAU), rr = e.r * rand(2.0, 3.4);
+          spawnParticle(e.x + Math.cos(a) * rr, e.y + Math.sin(a) * rr, -Math.cos(a) * 260, -Math.sin(a) * 260, 0.35, 3, e.color, 'spark');
+        }
+        if (e.entrance <= 0) {               // arrival slam
+          G.shake = Math.min(1, G.shake + 0.5);
+          G.flash = Math.max(G.flash, 0.35); G.flashColor = e.color;
+          G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: e.r * 5, life: 0.5, max: 0.5, color: e.color, kind: 'ring' });
+          sfx('boss');
+        }
+        return;
+      }
+      if (e.phasePause > 0) { e.phasePause -= dt; c.sp = 0; return; }   // phase-transition breather
       c.sp = (e.bdef && e.bdef.selfMove) ? 0 : e.speed;   // slow chase unless the def drives itself
       updateBoss(e, dt);
     },
@@ -2070,6 +2271,7 @@ function updateEnemies(dt) {
     // per-type behaviour (default = chase). Boss dispatched by its flag.
     const beh = e.boss ? EBEHAVIOR.boss : EBEHAVIOR[e.type];
     if (beh && beh.move) beh.move(e, c, dt);
+    if (e.frenzy > 0) { e.frenzy -= dt; c.sp *= HIVE_FRENZY_MUL; }   // HIVE pheromone rush
 
     e.vx = lerp(e.vx, c.ax * c.sp, 0.12);
     e.vy = lerp(e.vy, c.ay * c.sp, 0.12);
@@ -2168,6 +2370,7 @@ function damageEnemy(e, dmg, opts) {
   if (e.dead) return;
   if (e.intangible > 0) return;            // intangible (phantom blink) = takes no damage
   if (e.detonating) return;                // detonator mid-sequence is immune until it bursts
+  if (e.boss && e.entrance > 0) return;    // bosses are untouchable while materializing
   opts = opts || {};
   // Shielder: a frontal shield (faces the player) soaks most incoming projectile damage.
   if (e.type === 'shielder' && opts.proj && (opts.kbx || opts.kby)) {
@@ -2781,7 +2984,21 @@ function render() {
   for (const g of G.gems) { ctx.fillStyle = GR; poly(g.x, g.y, 4.5, 4, G.time * 3); ctx.fill(); }
   // enemies
   for (const e of G.enemies) {
-    if (e.boss && e.bdef) { e.bdef.draw(e); continue; }   // bosses render their own procedural body
+    if (e.boss && e.bdef) {                                // bosses render their own procedural body
+      if (e.entrance > 0) {                                // materialization: scale + fade in
+        const k = clamp(1 - e.entrance / BOSS_ENTRANCE_T, 0, 1);
+        const s = 0.25 + 0.75 * (1 - (1 - k) * (1 - k));   // ease-out
+        ctx.save(); ctx.globalAlpha = 0.15 + 0.85 * k;
+        ctx.translate(e.x, e.y); ctx.scale(s, s); ctx.translate(-e.x, -e.y);
+        e.bdef.draw(e); ctx.restore();
+        ctx.strokeStyle = rgba(e.color, 0.18 + 0.5 * (1 - k));   // summoning sigil
+        ctx.lineWidth = 2;
+        poly(e.x, e.y, e.r * (2.6 - 1.2 * k), 6, G.time * 1.7); ctx.stroke();
+        poly(e.x, e.y, e.r * (2.0 - 0.8 * k), 3, -G.time * 2.3); ctx.stroke();
+        continue;
+      }
+      e.bdef.draw(e); continue;
+    }
     const phasing = e.type === 'phantom' && e.intangible > 0;
     if (phasing) ctx.globalAlpha = (e.phState === 'fade') ? clamp(0.25 + 0.7 * (e.ghostA ?? 1), 0.25, 1) : 0.3; // fade-out telegraph, then ghostly
     ctx.lineWidth = e.boss ? 4 : (e.type === 'juggernaut' ? 3.2 : 2.2);

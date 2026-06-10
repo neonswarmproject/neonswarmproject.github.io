@@ -12,11 +12,11 @@ for every tunable. Zero console errors desktop + mobile.
 
 - [x] STEP 0 — overnight wrapper (tools/claude-overnight.sh), statusline shim,
       this progress file, launch instructions (tools/OVERNIGHT-README.md)
-- [ ] B — Adaptive difficulty director: lower early spawn rate/batch, hidden
+- [x] B — Adaptive difficulty director: lower early spawn rate/batch, hidden
       power+stress signals modulating spawns (between-boss windows only),
       progressive ~25s re-ramp after bomb, guaranteed early card variety,
       buff under-performing weapons
-- [ ] C1 — Boss-rush core: shuffled boss bag (OVERLORD included, no fixed
+- [x] C1 — Boss-rush core: shuffled boss bag (OVERLORD included, no fixed
       intro), elapsed-time+cycle scaling (not fixed rank), boss spawn sweeps
       normal enemies with spectacular shockwave (particles/flash/hitstop),
       director suppressed during fights (boss summons exempt), boss XP ≈ 5
