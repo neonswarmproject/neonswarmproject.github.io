@@ -183,6 +183,7 @@ const G = {
   bossBag: [],                     // shuffled bag of upcoming bosses (refilled per cycle)
   bossBanner: null,                // {name, life, max} — WARNING banner on boss arrival
   bossTier: 0,                     // completed bag cycles; bosses return stronger
+  lvUnlockAt: null,                // time when enemy leveling unlocked (Section E)
   glyphs: {},                      // boss id -> true once its Glyph Fragment is collected
   sigil: 0,                        // 0 none | 1 forged (all glyphs) | 2 consumed
   ritual: null,                    // {t} — ARCHITECT summoning countdown
@@ -1303,6 +1304,22 @@ function diffScale() {
   };
 }
 
+/* ---- v2 ENEMY LEVELS (Section E): stays 1 through the early game; starts
+   rising after the first full boss cycle OR a time threshold, whichever comes
+   first. Levels >= 2 show a small badge; level 1 shows nothing. ---- */
+const ENEMY_LV_START_TIER = 1;     // unlock after this many completed boss cycles...
+const ENEMY_LV_START_TIME = 480;   // ...or after this many seconds, whichever first
+const ENEMY_LV_PER_MIN = 0.5;      // levels gained per minute past the unlock point
+const ENEMY_LV_MAX = 9;
+const ENEMY_LV_HP = 0.35;          // +hp per level above 1
+const ENEMY_LV_DMG = 0.18;         // +dmg per level above 1
+const ENEMY_LV_SPEED = 0.04;       // +speed per level above 1
+const ENEMY_LV_XP = 0.30;          // +xp per level above 1
+function currentEnemyLevel() {
+  if (G.lvUnlockAt === null) return 1;
+  return clamp(1 + Math.floor((G.time - G.lvUnlockAt) / 60 * ENEMY_LV_PER_MIN), 1, ENEMY_LV_MAX);
+}
+
 function spawnEnemy(type, x, y, opts) {
   if (G.enemies.length >= MAX_ENEMIES) return null;
   const base = ETYPES[type];
@@ -1321,6 +1338,17 @@ function spawnEnemy(type, x, y, opts) {
   if (!e.boss && G.dirIntensity < 1) {
     const ease = 1 - DIR_STRENGTH_EASE * (1 - G.dirIntensity) / (1 - DIR_INTENSITY_MIN);
     e.hp *= ease; e.maxHp = e.hp; e.dmg *= ease;
+  }
+  // enemy levels (Section E): late-game normals arrive leveled-up
+  if (!e.boss && e.type !== 'archnode') {
+    e.lv = currentEnemyLevel();
+    if (e.lv > 1) {
+      const k = e.lv - 1;
+      e.hp *= 1 + k * ENEMY_LV_HP; e.maxHp = e.hp;
+      e.dmg *= 1 + k * ENEMY_LV_DMG;
+      e.speed *= 1 + k * ENEMY_LV_SPEED;
+      e.xp = Math.round(e.xp * (1 + k * ENEMY_LV_XP));
+    }
   }
   if (e.elite) { e.r *= 1.5; e.hp *= 4; e.maxHp = e.hp; e.xp *= 6; e.dmg *= 1.3; }
   G.enemies.push(e);
@@ -3034,6 +3062,10 @@ function update(dt) {
   G.time += dt;
   G.frost = null;
 
+  // enemy-level unlock marker (Section E)
+  if (G.lvUnlockAt === null && (G.bossTier >= ENEMY_LV_START_TIER || G.time >= ENEMY_LV_START_TIME))
+    G.lvUnlockAt = G.time;
+
   // bomb aftermath: spawn pressure climbs back progressively, never snaps
   if (G.spawnRamp < 1) G.spawnRamp = Math.min(1, G.spawnRamp + dt / BOMB_RAMP_TIME);
 
@@ -3379,6 +3411,13 @@ function render() {
       ctx.fillStyle = rgba('#000', 0.5); ctx.fillRect(e.x - w / 2, e.y - e.r - 8, w, 3);
       ctx.fillStyle = e.color; ctx.fillRect(e.x - w / 2, e.y - e.r - 8, w * clamp(e.hp / e.maxHp, 0, 1), 3);
     }
+    // level badge (Section E): only when meaningfully leveled
+    if (e.lv > 1) {
+      ctx.font = '700 10px Segoe UI, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = rgba(YE, 0.85);
+      ctx.fillText('Lv ' + e.lv, e.x, e.y - e.r - 12);
+    }
   }
   // enemy projectiles core
   for (const p of G.eProj) {
@@ -3639,7 +3678,7 @@ function startGame() {
     kills: 0, score: 0, combo: 0, comboTimer: 0,
     pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: FIRST_BOSS_AT, bossNum: 0, bossBag: [], bossBanner: null, bossTier: 0,
     dirIntensity: 1, dirStress: 0, dirKps: 0, dirDps: 0, spawnRamp: 1,
-    glyphs: {}, sigil: 0, ritual: null, sigilUI: null,
+    glyphs: {}, sigil: 0, ritual: null, sigilUI: null, lvUnlockAt: null,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });
   enemyId = 1;
