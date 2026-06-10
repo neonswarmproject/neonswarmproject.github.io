@@ -251,6 +251,7 @@ const G = {
   bossTier: 0,                     // completed bag cycles; bosses return stronger
   lvUnlockAt: null,                // time when enemy leveling unlocked (Section E)
   focusTarget: null,               // creature the player tapped/clicked (Section H)
+  dmgDir: null,                    // {a,t} — directional damage indicator (Section L)
   glyphs: {},                      // boss id -> true once its Glyph Fragment is collected
   sigil: 0,                        // 0 none | 1 forged (all glyphs) | 2 consumed
   ritual: null,                    // {t} — ARCHITECT summoning countdown
@@ -522,11 +523,14 @@ function tryDash() {
     spawnParticle(player.x, player.y, -d.x * rand(40, 160) + rand(-40, 40), -d.y * rand(40, 160) + rand(-40, 40), rand(0.2, 0.4), rand(2, 4), CY, 'spark');
 }
 
-function hurtPlayer(dmg) {
+const DMG_IND_T = 0.6;        // s the directional damage indicator stays up (Section L)
+const FIRST_RUN_HINT_T = 14;  // s the first-run hint line stays on screen (Section L)
+function hurtPlayer(dmg, srcX, srcY) {
   if (player.invuln > 0 || player.dashTime > 0 || G.state !== 'playing') return;
   const real = Math.max(1, dmg - player.stats.armor);
   player.hp -= real;
   G.dirDps += real;                       // feeds the hidden stress signal
+  if (srcX !== undefined) G.dmgDir = { a: angTo(player.x, player.y, srcX, srcY), t: DMG_IND_T };
   player.invuln = 0.75;
   G.shake = Math.min(1, G.shake + 0.5);
   G.flash = 0.6; G.flashColor = RD;
@@ -2649,7 +2653,7 @@ const EBEHAVIOR = {
         e.intangible = PHANTOM_FADE + PHANTOM_POST;              // immune the instant it starts fading
       }
     },
-    contact(e, c) { if (e.intangible > 0) return; hurtPlayer(e.dmg); e.vx -= c.ax * 60; e.vy -= c.ay * 60; },
+    contact(e, c) { if (e.intangible > 0) return; hurtPlayer(e.dmg, e.x, e.y); e.vx -= c.ax * 60; e.vy -= c.ay * 60; },
   },
   // Detonator: a heavy bomber. Chases like a bomber; on contact or on death it
   // arms (accelerating blink telegraph) then erupts in 3 staggered rings.
@@ -2801,7 +2805,7 @@ function updateEnemies(dt) {
     // contact with player
     if (c.d < e.r + player.r) {
       if (beh && beh.contact) beh.contact(e, c);
-      else { hurtPlayer(e.dmg); e.vx -= c.ax * 60; e.vy -= c.ay * 60; } // default knockback
+      else { hurtPlayer(e.dmg, e.x, e.y); e.vx -= c.ax * 60; e.vy -= c.ay * 60; } // default knockback
     }
   }
 }
@@ -2840,7 +2844,7 @@ function updateEnemyProjectiles(dt) {
       spawnParticle(p.x, p.y, 0, 0, 0.15, 3, p.color, 'spark');
     if (p.life <= 0 || dist2(p.x, p.y, player.x, player.y) > EBULLET_CULL * EBULLET_CULL) { arr.splice(i, 1); continue; }
     if (dist2(p.x, p.y, player.x, player.y) < (p.r + player.r) ** 2) {
-      hurtPlayer(p.dmg);
+      hurtPlayer(p.dmg, p.x - p.vx * 0.1, p.y - p.vy * 0.1);   // indicator points up the bullet's path
       arr.splice(i, 1);
     }
   }
@@ -3348,6 +3352,8 @@ function update(dt) {
   if (G.flash > 0) G.flash = Math.max(0, G.flash - dt * 2.4);
   if (G.glitchFX > 0) G.glitchFX = Math.max(0, G.glitchFX - dt * 1.5);
   if (G.bossBanner && (G.bossBanner.life -= dt) <= 0) G.bossBanner = null;
+  if (G.dmgDir && (G.dmgDir.t -= dt) <= 0) G.dmgDir = null;
+  if (!META.firstRunDone && G.time >= FIRST_RUN_HINT_T) { META.firstRunDone = true; saveMeta(META); }
 
   // music intensity ramps with on-screen pressure + time
   if (Sound) Sound.setIntensity(clamp(G.enemies.length / 120 + G.time / 600 + (G.boss ? 0.5 : 0), 0, 1));
@@ -3845,6 +3851,25 @@ function drawHUD() {
     for (let i = 0; i < nph; i++) { const px = bx + bw - 8 - i * 16, py = by + bh + 8; ctx.fillStyle = (i < b.phase) ? (b.color || MA) : rgba(WH, 0.2); ctx.beginPath(); ctx.arc(px, py, 4, 0, TAU); ctx.fill(); }
   }
 
+  // directional damage indicator (Section L): a red arc toward the hit source
+  if (G.dmgDir) {
+    const k = clamp(G.dmgDir.t / DMG_IND_T, 0, 1);
+    const rr = Math.min(W, H) * 0.32;
+    ctx.strokeStyle = rgba(RD, 0.7 * k); ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(W / 2, H / 2, rr, G.dmgDir.a - 0.35, G.dmgDir.a + 0.35); ctx.stroke();
+  }
+
+  // first-run hint (Section L): one line, fades after the opening seconds
+  if (!META.firstRunDone && G.time < FIRST_RUN_HINT_T) {
+    const a2 = clamp(Math.min(G.time, FIRST_RUN_HINT_T - G.time), 0, 1);
+    ctx.font = '700 14px Segoe UI, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = rgba(WH, 0.75 * a2);
+    ctx.fillText(IS_TOUCH
+      ? 'Drag to move · double-tap or » to dash · dodge the bright telegraphs'
+      : 'WASD to move · Space to dash · dodge the bright telegraphs', W / 2, H - 86);
+  }
+
   // low HP vignette
   if (player.hp / player.maxHp < 0.3) {
     const pulse = 0.25 + 0.15 * Math.sin(G.time * 6);
@@ -3946,7 +3971,7 @@ function startGame() {
     pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: FIRST_BOSS_AT, bossNum: 0, bossBag: [], bossBanner: null, bossTier: 0,
     dirIntensity: 1, dirStress: 0, dirKps: 0, dirDps: 0, spawnRamp: 1,
     glyphs: {}, sigil: 0, ritual: null, sigilUI: null, lvUnlockAt: null,
-    dashZoom: 0, trail: [], focusTarget: null,
+    dashZoom: 0, trail: [], focusTarget: null, dmgDir: null,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });
   enemyId = 1;
@@ -3971,13 +3996,16 @@ function gameOver() {
   sfx('gameover');
   if (Sound) Sound.stopMusic();
   const cur = { score: G.score, time: Math.floor(G.time), kills: G.kills, level: player.level };
-  const isBest = cur.score > (G.best.score || 0);
+  const prevBest = G.best.score || 0;
+  const isBest = cur.score > prevBest;
   if (isBest) { G.best = cur; saveBest(cur); }
   document.getElementById('newBest').classList.toggle('show', isBest);
+  // "how close was this run" (Section L): score as a % of the previous best
+  const vsBest = isBest ? 'NEW BEST' : (prevBest ? Math.round(cur.score / prevBest * 100) + '% of best' : '—');
   document.getElementById('overStats').innerHTML = statGrid([
     ['Survived', fmtTime(cur.time)], ['Level', cur.level],
     ['Kills', cur.kills], ['Score', cur.score.toLocaleString()],
-    ['Best Score', (G.best.score || 0).toLocaleString()], ['Best Time', fmtTime(G.best.time || 0)],
+    ['Best Score', (G.best.score || 0).toLocaleString()], ['This Run', vsBest],
   ]);
   showOverlay('gameover');
 }
