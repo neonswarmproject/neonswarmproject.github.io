@@ -21,13 +21,14 @@ for every tunable. Zero console errors desktop + mobile.
       normal enemies with spectacular shockwave (particles/flash/hitstop),
       director suppressed during fights (boss summons exempt), boss XP ≈ 5
       levels (fix ~20-level dump)
-- [ ] C2 — Boss epic-ness: richer procedural designs, entrance animations,
+- [x] C2 — Boss epic-ness: richer procedural designs, entrance animations,
       phase-transition cinematics, more telegraphed attack patterns for
       OVERLORD, PRISM, HIVE, GLITCH, CONDUCTOR, WARDEN (OVERLORD gets special
       attention)
-- [ ] D — THE ARCHITECT: glyph fragments from each roster boss → sigil UI slot
-      → portal ritual → 4–5-phase screen-dominating super-boss, fixed brutal
-      difficulty, legendary reward + meta unlock
+- [x] D — THE ARCHITECT: glyph fragments from each roster boss → sigil UI slot
+      → portal ritual → 5-phase screen-dominating super-boss with destructible
+      rune nodes, fixed brutal difficulty, Ascendant Core + permanent meta
+      unlock (extra reroll + damage head start, title-screen badge)
 - [ ] E — Enemy levels: Lv scaling starts after first boss cycle/time
       threshold, "Lv N" badge only when level ≥ 2, named constants
 - [ ] F — Movement feel: quick turn response, dash velocity transfer, dash

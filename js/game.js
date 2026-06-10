@@ -183,6 +183,10 @@ const G = {
   bossBag: [],                     // shuffled bag of upcoming bosses (refilled per cycle)
   bossBanner: null,                // {name, life, max} — WARNING banner on boss arrival
   bossTier: 0,                     // completed bag cycles; bosses return stronger
+  glyphs: {},                      // boss id -> true once its Glyph Fragment is collected
+  sigil: 0,                        // 0 none | 1 forged (all glyphs) | 2 consumed
+  ritual: null,                    // {t} — ARCHITECT summoning countdown
+  sigilUI: null,                   // screen-space hit area of the sigil slot
   inputHiccup: 0,                  // brief (<=0.5s) movement-input loss from GLITCH boss
   glitchFX: 0,                     // screen-space glitch overlay intensity 0..1
   boss: null,
@@ -199,6 +203,10 @@ function loadBest() {
   catch (e) { return { score: 0, time: 0, kills: 0, level: 1 }; }
 }
 function saveBest(b) { try { localStorage.setItem('neonswarm.best', JSON.stringify(b)); } catch (e) {} }
+// permanent meta-progression (Section D: THE ARCHITECT unlock lives here)
+function loadMeta() { try { return JSON.parse(localStorage.getItem('neonswarm.meta')) || {}; } catch (e) { return {}; } }
+function saveMeta(m) { try { localStorage.setItem('neonswarm.meta', JSON.stringify(m)); } catch (e) {} }
+const META = loadMeta();
 
 /* ===========================================================================
    5. INPUT
@@ -241,6 +249,7 @@ function key(e, down) {
     if (G.state === 'playing' || G.state === 'paused') {
       if (k === 'Escape' || k === 'p') return togglePause();
     }
+    if (G.state === 'playing' && k === 'g') return activateSigil();   // ARCHITECT summon
     keys.add(k);
     if ((k === ' ' || k === 'Shift') && G.state === 'playing') tryDash();
   } else {
@@ -259,6 +268,14 @@ function onPointerDown(e) {
   const r = canvas.getBoundingClientRect();
   pointer.sx = pointer.x = e.clientX - r.left;
   pointer.sy = pointer.y = e.clientY - r.top;
+
+  // SIGIL slot tap/click (Section D) — consumes the press, never moves/dashes
+  if (G.state === 'playing' && G.sigilUI &&
+      dist(pointer.sx, pointer.sy, G.sigilUI.x, G.sigilUI.y) <= G.sigilUI.r + 8) {
+    pointer.down = false;
+    activateSigil();
+    return;
+  }
 
   if (G.state === 'playing' && pointer.type === 'touch') {
     const now = performance.now();
@@ -1266,6 +1283,9 @@ const ETYPES = {
   disruptor:  { hp: 35,  speed: 80,  r: 14, dmg: 8,  xp: 4,  color: MA, shape: 'circle' },
   saw:        { hp: 50,  speed: 80,  r: 16, dmg: 14, xp: 4,  color: YE, shape: 'spiky' },
   juggernaut: { hp: 220, speed: 50,  r: 30, dmg: 24, xp: 12, color: OR, shape: 'hex' },
+  // ARCHITECT rune node (Section D): destructible orbiting part; stats come
+  // from ARCH_NODE_* via spawn opts (fixed difficulty, no time scaling).
+  archnode:   { hp: 1000, speed: 0,  r: 20, dmg: 14, xp: 0,  color: PU, shape: 'penta' },
 };
 
 // Late-game difficulty curve. HP ramps hard past ~4 min (cubic term); speed is
@@ -1419,7 +1439,8 @@ function director(dt) {
   }
   // boss cadence: bosses are the main event. The next one is scheduled when
   // the current one dies (killEnemy sets nextBossAt = time + BOSS_FARM_WINDOW).
-  if (!G.boss && G.time >= G.nextBossAt) spawnBoss();
+  // The ARCHITECT ritual owns the arena: no roster boss may interrupt it.
+  if (!G.boss && !G.ritual && G.time >= G.nextBossAt) spawnBoss();
 }
 
 /* ===========================================================================
@@ -1521,6 +1542,32 @@ function spawnBoss(forcedId) {
   if (Sound) { Sound.setIntensity(1); Sound.setMusicTempo(126); }
 }
 
+/* ---- THE ARCHITECT: summon ritual + spawn (Section D) ---- */
+function activateSigil() {
+  if (G.sigil !== 1 || G.state !== 'playing' || G.boss || G.ritual) return;
+  G.sigil = 2;
+  G.ritual = { t: ARCH_RITUAL };
+  addTelegraph({ kind: 'zone', x: 0, y: 0, r: ARCH_R * 2.4, dur: ARCH_RITUAL, color: PU });
+  G.bossBanner = { name: 'SOMETHING STIRS BEYOND THE SWARM…', life: 3.0, max: 3.0 };
+  sfx('boss');
+}
+
+function spawnArchitect() {
+  bossSweepArena(0, 0, PU);
+  const def = BOSSES.architect;
+  const e = spawnEnemy('tank', 0, 0, {
+    boss: true, r: ARCH_R, color: PU, shape: 'boss',
+    hp: ARCH_HP, maxHp: ARCH_HP, speed: ARCH_SPEED, dmg: ARCH_DMG,
+    xp: 400, name: def.name, bdef: def, data: {}, phase: 0,
+    suppressSpawns: true, entrance: ARCH_ENTRANCE, phasePause: 0,
+  });
+  G.boss = e;
+  G.bossBanner = { name: 'THE ARCHITECT', life: 3.2, max: 3.2 };
+  G.flash = 0.6; G.flashColor = PU; G.shake = 1;
+  sfx('boss');
+  if (Sound) { Sound.setIntensity(1); Sound.setMusicTempo(132); }
+}
+
 // Called from EBEHAVIOR.boss (movement is still handled by updateEnemies unless a
 // def opts into selfMove). Computes phase, runs the shared transition, then the brain.
 function updateBoss(e, dt) {
@@ -1564,6 +1611,26 @@ const HIVE_FRENZY_CD = 6, HIVE_FRENZY_T = 2.5, HIVE_FRENZY_MUL = 1.8, HIVE_EGG_S
 const GLITCH_CORRUPT_CD = 5, GLITCH_CORRUPT_N = 4, GLITCH_CORRUPT_R = 110, GLITCH_CORRUPT_TELE = 0.9;
 const COND_GAPRING_SPD = 180, COND_GAPRING_N = 36, COND_GAPRING_GAP = 5;
 const WARDEN_LANCE_CD = 5, WARDEN_LANCE_N = 3, WARDEN_LANCE_TELE = 0.7, WARDEN_LANCE_SPD = 520;
+
+/* ---- THE ARCHITECT (Section D): voluntary super-boss. Fixed, brutal stats —
+   deliberately NOT touched by the adaptive director or build scaling. ---- */
+const ARCH_HP = 24000, ARCH_DMG = 30, ARCH_R = 110, ARCH_SPEED = 26;
+const ARCH_ENTRANCE = 2.6, ARCH_RITUAL = 4.0;
+const ARCH_NODE_N = 4, ARCH_NODE_HP = 1150, ARCH_NODE_DMG = 14, ARCH_NODE_ORBIT = 230, ARCH_NODE_FIRE = 2.4, ARCH_NODE_SPIN = 0.5;
+const ARCH_SHIELD_MUL = 0.35;     // core damage taken while any rune node lives
+const ARCH_COMET_CD = 3.6, ARCH_COMET_N = 7, ARCH_COMET_SPD = 250;
+const ARCH_BEAM_CD = 7, ARCH_BEAM_TELE = 1.0, ARCH_BEAM_DUR = 2.6, ARCH_BEAM_N = 4, ARCH_BEAM_W = 24, ARCH_BEAM_SWEEP = 0.38, ARCH_BEAM_LEN = 1500;
+const ARCH_SUMMON_CD = 7.5, ARCH_SUMMON_N = 6;
+const ARCH_RAIN_CD = 4.2, ARCH_RAIN_N = 9, ARCH_RAIN_SPD = 360, ARCH_RAIN_TELE = 0.6;
+const ARCH_TP_CD = 3.6;
+const ARCH_SECTOR_CD = 6.5, ARCH_SECTOR_N = 6, ARCH_SECTOR_R = 120, ARCH_SECTOR_TELE = 1.0;
+const ARCH_GAPRING_CD = 3.4, ARCH_GAPRING_N = 44, ARCH_GAPRING_GAP = 6, ARCH_GAPRING_SPD = 190;
+const ARCH_PULL = 60, ARCH_PULL_R = 640;
+const ARCH_SPIRAL_GAP = 0.06, ARCH_SPIRAL_SPD = 200;
+const ARCH_NOVA_CD = 7, ARCH_NOVA_TELE = 1.4, ARCH_NOVA_R = 420;
+const ARCH_ERASE_CD_MUL = 0.7;    // final phase: every cooldown shortened
+const ASCENDANT_DMG = 1.25, ASCENDANT_AS = 1.15, ASCENDANT_INVULN = 5;
+const META_ARCH_DMG = 1.05;       // permanent head start once the ARCHITECT falls
 
 const BOSSES = {
   /* ---- SLOT 0: OVERLORD (intro) ---- */
@@ -1970,6 +2037,208 @@ const BOSSES = {
       if (e.data.wells) for (const w of e.data.wells) { glow(w.x, w.y, 20, PU, 0.7); ctx.strokeStyle = rgba(BL, 0.5); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(w.x, w.y, WARDEN_WELL_R, 0, TAU); ctx.stroke(); ctx.fillStyle = rgba('#05030f', 0.85); ctx.beginPath(); ctx.arc(w.x, w.y, 10, 0, TAU); ctx.fill(); }
     },
   },
+
+  /* ---- THE ARCHITECT — the intelligence behind the swarm (Section D).
+     Voluntary super-boss: 5 phases, 4 destructible rune nodes shielding the
+     core, evolved versions of every roster boss's signature, fixed brutal
+     stats. Summoned only via the forged SIGIL. ---- */
+  architect: {
+    id: 'architect', name: 'THE ARCHITECT', color: PU, r: ARCH_R, speed: ARCH_SPEED, hpMul: 1,
+    drop: 'ascendant', phaseThresholds: [0.8, 0.6, 0.4, 0.2],
+    update(e, dt) {
+      const d = e.data;
+      const F = e.phase >= 4 ? ARCH_ERASE_CD_MUL : 1;        // ERASE: all cooldowns shortened
+      if (!d.init) {                                          // deploy the rune nodes once
+        d.init = true; d.nodes = [];
+        for (let k = 0; k < ARCH_NODE_N; k++) {
+          const n = spawnEnemy('archnode', e.x + 10, e.y, {
+            hp: ARCH_NODE_HP, maxHp: ARCH_NODE_HP, dmg: ARCH_NODE_DMG,
+            arch: e, orbA: k / ARCH_NODE_N * TAU, fireT: rand(0.5, 2),
+          });
+          if (n) d.nodes.push(n);
+        }
+      }
+      e.shieldMul = (d.nodes && d.nodes.some(n => !n.dead)) ? ARCH_SHIELD_MUL : null;
+
+      // comet fans — constant pressure in every phase
+      d.cometT = (d.cometT ?? ARCH_COMET_CD) - dt;
+      if (d.cometT <= 0) {
+        d.cometT = ARCH_COMET_CD * F;
+        const base = angTo(e.x, e.y, player.x, player.y);
+        for (let k = 0; k < ARCH_COMET_N; k++) {
+          const a = base + (k - (ARCH_COMET_N - 1) / 2) * 0.13;
+          spawnEnemyProjectile(e.x, e.y, Math.cos(a) * ARCH_COMET_SPD, Math.sin(a) * ARCH_COMET_SPD, e.dmg * B_BULLET, MA, { kind: 'home', turn: 0.8, life: 3.4, r: 8, arm: 0.25 });
+        }
+      }
+      // SURVEY — quad rune beams, telegraphed rotating sweep (OVERLORD evolved)
+      if (d.bmState === undefined) { d.bmState = 'idle'; d.bmCD = ARCH_BEAM_CD * 0.6; }
+      if (d.bmState === 'idle') {
+        d.bmCD -= dt;
+        if (d.bmCD <= 0) {
+          d.bmState = 'tele'; d.bmT = ARCH_BEAM_TELE; d.bmA = angTo(e.x, e.y, player.x, player.y);
+          for (let k = 0; k < ARCH_BEAM_N; k++)
+            addTelegraph({ kind: 'line', x: e.x, y: e.y, a: d.bmA + k / ARCH_BEAM_N * TAU, len: ARCH_BEAM_LEN, w: 10, dur: ARCH_BEAM_TELE, color: MA });
+        }
+      } else if (d.bmState === 'tele') {
+        d.bmT -= dt; if (d.bmT <= 0) { d.bmState = 'fire'; d.bmT = ARCH_BEAM_DUR; }
+      } else {
+        d.bmT -= dt; d.bmA += ARCH_BEAM_SWEEP * dt * (e.phase >= 2 ? 1.3 : 1);
+        for (let k = 0; k < ARCH_BEAM_N; k++) {
+          const a = d.bmA + k / ARCH_BEAM_N * TAU;
+          const ex = e.x + Math.cos(a) * ARCH_BEAM_LEN, ey = e.y + Math.sin(a) * ARCH_BEAM_LEN;
+          G.beams.push({ x1: e.x, y1: e.y, x2: ex, y2: ey, w: ARCH_BEAM_W, life: 0.05, max: 0.05, color: MA });
+          if (segDist(e.x, e.y, ex, ey, player.x, player.y) < ARCH_BEAM_W / 2 + player.r) hurtPlayer(e.dmg * B_BEAM);
+        }
+        if (d.bmT <= 0) { d.bmState = 'idle'; d.bmCD = ARCH_BEAM_CD * F; }
+      }
+      // REPLICATE (phase 2+): drone broods + chromatic shard rain (HIVE/PRISM evolved)
+      if (e.phase >= 1) {
+        d.sumT = (d.sumT ?? ARCH_SUMMON_CD) - dt;
+        if (d.sumT <= 0) {
+          d.sumT = ARCH_SUMMON_CD * F;
+          for (let k = 0; k < ARCH_SUMMON_N; k++) {
+            const a = k / ARCH_SUMMON_N * TAU;
+            spawnEnemy('mini', e.x + Math.cos(a) * (e.r + 30), e.y + Math.sin(a) * (e.r + 30), { vx: Math.cos(a) * 140, vy: Math.sin(a) * 140 });
+          }
+          G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: e.r * 2.2, life: 0.4, max: 0.4, color: GR, kind: 'ring' });
+        }
+        d.rainT = (d.rainT ?? ARCH_RAIN_CD) - dt;
+        if (d.rainT <= 0) {
+          d.rainT = ARCH_RAIN_CD * F;
+          for (let k = 0; k < ARCH_RAIN_N; k++)
+            spawnEnemyProjectile(player.x + rand(-420, 420), player.y - rand(400, 560), 0, ARCH_RAIN_SPD, e.dmg * B_BULLET, [CY, MA, YE][k % 3], { kind: 'square', r: 8, arm: ARCH_RAIN_TELE, life: 5 });
+        }
+      }
+      // REWRITE (phase 3+): reality blinks + corrupted sectors (GLITCH evolved)
+      if (e.phase >= 2) {
+        d.tpT = (d.tpT ?? ARCH_TP_CD) - dt;
+        if (d.tpT <= 0) {
+          d.tpT = ARCH_TP_CD * F;
+          const a = rand(0, TAU), rr = rand(260, 460), lim2 = ARENA / 2 - e.r;
+          e.x = clamp(player.x + Math.cos(a) * rr, -lim2, lim2);
+          e.y = clamp(player.y + Math.sin(a) * rr, -lim2, lim2);
+          e.vx = 0; e.vy = 0;
+          for (let k = 0; k < 14; k++) spawnParticle(e.x, e.y, rand(-200, 200), rand(-200, 200), 0.35, 3, pick([PU, MA, CY]), 'spark');
+        }
+        d.secT = (d.secT ?? ARCH_SECTOR_CD) - dt;
+        if (d.secT <= 0) {
+          d.secT = ARCH_SECTOR_CD * F; d.sectors = d.sectors || [];
+          for (let k = 0; k < ARCH_SECTOR_N; k++) {
+            const zx = player.x + rand(-340, 340), zy = player.y + rand(-340, 340);
+            d.sectors.push({ x: zx, y: zy, t: ARCH_SECTOR_TELE });
+            addTelegraph({ kind: 'zone', x: zx, y: zy, r: ARCH_SECTOR_R, dur: ARCH_SECTOR_TELE, color: YE });
+          }
+        }
+      }
+      if (d.sectors) for (let i = d.sectors.length - 1; i >= 0; i--) {
+        const z = d.sectors[i]; z.t -= dt;
+        if (z.t <= 0) {
+          explodeAt(z.x, z.y, ARCH_SECTOR_R, YE);
+          if (dist(z.x, z.y, player.x, player.y) < ARCH_SECTOR_R + player.r) hurtPlayer(e.dmg * B_BULLET);
+          d.sectors.splice(i, 1);
+        }
+      }
+      // CONDUCT (phase 4+): gravity grip + gap rings + twin spiral arms
+      // (WARDEN/CONDUCTOR evolved)
+      if (e.phase >= 3) {
+        const ga = angTo(player.x, player.y, e.x, e.y), gd = dist(player.x, player.y, e.x, e.y);
+        const lim3 = ARENA / 2 - player.r;
+        if (gd < ARCH_PULL_R && gd > player.r + e.r) {
+          player.x = clamp(player.x + Math.cos(ga) * ARCH_PULL * dt, -lim3, lim3);
+          player.y = clamp(player.y + Math.sin(ga) * ARCH_PULL * dt, -lim3, lim3);
+        }
+        d.grT = (d.grT ?? ARCH_GAPRING_CD) - dt;
+        if (d.grT <= 0) {
+          d.grT = ARCH_GAPRING_CD * F;
+          const gap = (Math.random() * ARCH_GAPRING_N) | 0;
+          for (let k = 0; k < ARCH_GAPRING_N; k++) {
+            if ((k - gap + ARCH_GAPRING_N) % ARCH_GAPRING_N < ARCH_GAPRING_GAP) continue;
+            const a = k / ARCH_GAPRING_N * TAU;
+            spawnEnemyProjectile(e.x, e.y, Math.cos(a) * ARCH_GAPRING_SPD, Math.sin(a) * ARCH_GAPRING_SPD, e.dmg * B_BULLET, YE, { r: 8 });
+          }
+        }
+        d.spA = (d.spA || 0) + dt * 1.1; d.spE = (d.spE ?? 0) - dt;
+        if (d.spE <= 0) {
+          d.spE = ARCH_SPIRAL_GAP * (e.phase >= 4 ? 0.8 : 1);
+          for (let arm = 0; arm < 2; arm++) {
+            const a = d.spA + arm * Math.PI;
+            spawnEnemyProjectile(e.x, e.y, Math.cos(a) * ARCH_SPIRAL_SPD, Math.sin(a) * ARCH_SPIRAL_SPD, e.dmg * B_BULLET, BL, { kind: 'curve', spin: 0.5, life: 4 });
+          }
+        }
+      }
+      // ERASE (final phase): telegraphed implosion novas on top of everything
+      if (e.phase >= 4) {
+        d.novaT = (d.novaT ?? ARCH_NOVA_CD) - dt;
+        if (d.novaT <= 0 && !(d.nova > 0)) {
+          d.nova = ARCH_NOVA_TELE; d.novaT = ARCH_NOVA_CD;
+          addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: ARCH_NOVA_R, dur: ARCH_NOVA_TELE, color: RD });
+        }
+        if (d.nova > 0) {
+          d.nova -= dt;
+          if (Math.random() < 0.6) {
+            const a = rand(0, TAU);
+            spawnParticle(e.x + Math.cos(a) * ARCH_NOVA_R, e.y + Math.sin(a) * ARCH_NOVA_R, -Math.cos(a) * 300, -Math.sin(a) * 300, 0.4, 3, RD, 'spark');
+          }
+          if (d.nova <= 0) {
+            explodeAt(e.x, e.y, ARCH_NOVA_R, RD);
+            if (dist(e.x, e.y, player.x, player.y) < ARCH_NOVA_R + player.r) hurtPlayer(e.dmg * B_NOVA);
+            bossRing(e, 48, 230, B_BULLET, rand(0, TAU), RD);
+          }
+        }
+      }
+    },
+    onPhase(e, ph) {
+      const names = ['SURVEY', 'REPLICATE', 'REWRITE', 'CONDUCT', 'ERASE'];
+      floater(e.x, e.y - e.r - 48, names[Math.min(ph, 4)], PU, 26);
+      bossRing(e, 30 + ph * 8, 210, B_BULLET, rand(0, TAU), [PU, MA, CY, YE, WH][ph % 5]);
+    },
+    draw(e) {
+      const d = e.data, t = G.time;
+      const nodesAlive = d.nodes ? d.nodes.some(n => !n.dead) : false;
+      // triple counter-rotating rune rings
+      const ringCols = [PU, MA, CY];
+      for (let ringI = 0; ringI < 3; ringI++) {
+        const rr = e.r * (1.25 + ringI * 0.33);
+        const base = t * (0.35 + ringI * 0.15) * (ringI % 2 ? -1 : 1);
+        ctx.strokeStyle = rgba(ringCols[ringI], 0.35); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(e.x, e.y, rr, 0, TAU); ctx.stroke();
+        const nGlyphs = 10 + ringI * 4;
+        for (let k = 0; k < nGlyphs; k++) {
+          const a = base + k / nGlyphs * TAU;
+          ctx.strokeStyle = rgba(ringCols[ringI], 0.8); ctx.lineWidth = 1.6;
+          poly(e.x + Math.cos(a) * rr, e.y + Math.sin(a) * rr, 5, 3 + (k % 3), a); ctx.stroke();
+        }
+      }
+      // geometric limbs: four slow-rotating blades
+      for (let k = 0; k < 4; k++) {
+        const a = t * 0.22 + k / 4 * TAU;
+        const x1 = e.x + Math.cos(a) * e.r * 0.7, y1 = e.y + Math.sin(a) * e.r * 0.7;
+        const x2 = e.x + Math.cos(a) * e.r * 1.18, y2 = e.y + Math.sin(a) * e.r * 1.18;
+        ctx.strokeStyle = rgba(WH, 0.65); ctx.lineWidth = 7;
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+        glow(x2, y2, 9, PU, 0.7);
+      }
+      // hexagram frame + inner counter-rotor
+      glow(e.x, e.y, e.r * 1.6, PU, 0.55);
+      ctx.fillStyle = rgba('#0a0620', 0.85); ctx.strokeStyle = rgba(WH, 0.95); ctx.lineWidth = 5;
+      star(e.x, e.y, e.r, 6, e.rot * 0.4, 0.72); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = rgba(MA, 0.8); ctx.lineWidth = 2.5;
+      poly(e.x, e.y, e.r * 0.62, 6, -e.rot * 0.8); ctx.stroke();
+      // the all-seeing eye: sclera + iris that tracks the player + dark pupil
+      const ea = angTo(e.x, e.y, player.x, player.y);
+      ctx.fillStyle = rgba(WH, 0.92);
+      ctx.beginPath(); ctx.ellipse(e.x, e.y, e.r * 0.42, e.r * 0.26, 0, 0, TAU); ctx.fill();
+      const ix = e.x + Math.cos(ea) * e.r * 0.13, iy = e.y + Math.sin(ea) * e.r * 0.08;
+      ctx.fillStyle = PU; ctx.beginPath(); ctx.arc(ix, iy, e.r * 0.13, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#05030f'; ctx.beginPath(); ctx.arc(ix, iy, e.r * 0.055, 0, TAU); ctx.fill();
+      glow(ix, iy, e.r * 0.2, MA, 0.8);
+      // shield shimmer while rune nodes survive
+      if (nodesAlive) {
+        ctx.strokeStyle = rgba(CY, 0.25 + 0.15 * Math.sin(t * 6)); ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(e.x, e.y, e.r * 1.08, 0, TAU); ctx.stroke();
+      }
+    },
+  },
 };
 function romanize(n) { return ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'][n - 1] || ('#' + n); }
 
@@ -2236,6 +2505,25 @@ const EBEHAVIOR = {
       }
     },
   },
+  // ARCHITECT rune node: locked in orbit around the super-boss; fires aimed
+  // triples. While any node lives the ARCHITECT's core is heavily shielded.
+  archnode: {
+    move(e, c, dt) {
+      const b = e.arch;
+      if (!b || b.dead) { killEnemy(e, false); return; }
+      e.orbA += dt * ARCH_NODE_SPIN;
+      e.x = b.x + Math.cos(e.orbA) * ARCH_NODE_ORBIT;
+      e.y = b.y + Math.sin(e.orbA) * ARCH_NODE_ORBIT;
+      e.vx = 0; e.vy = 0; c.sp = 0;
+      e.fireT -= dt;
+      if (e.fireT <= 0 && c.d < 900) {
+        e.fireT = ARCH_NODE_FIRE;
+        const a = angTo(e.x, e.y, player.x, player.y);
+        for (let s = -1; s <= 1; s++)
+          spawnEnemyProjectile(e.x, e.y, Math.cos(a + s * 0.14) * 260, Math.sin(a + s * 0.14) * 260, e.dmg, PU);
+      }
+    },
+  },
   // Saw: a fast buzzsaw that flies in a straight line, bouncing off the arena
   // walls. High contact damage; spins rapidly (rot handled in updateEnemies).
   saw: {
@@ -2276,8 +2564,8 @@ function updateEnemies(dt) {
     e.vx = lerp(e.vx, c.ax * c.sp, 0.12);
     e.vy = lerp(e.vy, c.ay * c.sp, 0.12);
 
-    // light separation so they don't fully stack
-    if (!e.boss) {
+    // light separation so they don't fully stack (rune nodes are orbit-locked)
+    if (!e.boss && e.type !== 'archnode') {
       grid.query(e.x, e.y, e.r + 18, _q);
       let px = 0, py = 0, cnt = 0;
       for (let j = 0; j < _q.length; j++) {
@@ -2382,6 +2670,7 @@ function damageEnemy(e, dmg, opts) {
       spawnParticle(e.x + Math.cos(from) * e.r, e.y + Math.sin(from) * e.r, 0, 0, 0.2, 3, BL, 'spark');
     }
   }
+  if (e.shieldMul) dmg *= e.shieldMul;     // ARCHITECT core shield while nodes live
   let crit = false;
   if (Math.random() < S().crit) { crit = true; dmg *= S().critMult; }
   dmg = Math.round(dmg);
@@ -2410,7 +2699,21 @@ function killEnemy(e, reward) {
     sfx('bigExplode'); G.hitstop = 0.12; G.flash = 0.5; G.flashColor = e.color;
     G.nextBossAt = G.time + BOSS_FARM_WINDOW;   // open the next farming window
     if (Sound) { Sound.setIntensity(0.5); Sound.setMusicTempo(116); }
-    if (e.bdef) { spawnPickup(e.x, e.y, e.bdef.drop); spawnPickup(e.x + 44, e.y, 'heal'); } // exclusive drop + heal
+    if (e.bdef && e.bdef.id === 'architect') {
+      // THE achievement: cinematic death, legendary drop, permanent meta unlock
+      G.hitstop = 0.3; G.flash = 0.9; G.flashColor = WH; G.shake = 1;
+      for (let k = 0; k < 5; k++)
+        G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: 300 + k * 260, life: 0.7 + k * 0.12, max: 0.7 + k * 0.12, color: [WH, PU, MA, CY, YE][k], kind: 'ring' });
+      spawnPickup(e.x, e.y, 'ascendant');
+      for (const o of G.enemies) if (o.type === 'archnode' && !o.dead) killEnemy(o, false);
+      if (!META.architectSlain) { META.architectSlain = true; saveMeta(META); }
+      floater(e.x, e.y - e.r, 'THE ARCHITECT FALLS', WH, 26);
+    } else if (e.bdef) {
+      spawnPickup(e.x, e.y, e.bdef.drop); spawnPickup(e.x + 44, e.y, 'heal'); // exclusive drop + heal
+      // unique Glyph Fragment (one per boss per run) — fuel for the SIGIL
+      if (BOSS_IDS.includes(e.bdef.id) && !G.glyphs[e.bdef.id])
+        spawnPickup(e.x, e.y + 44, 'glyph', { glyphId: e.bdef.id });
+    }
   }
 
   if (reward !== false) {
@@ -2467,9 +2770,11 @@ function spawnGem(x, y, value) {
   }
   G.gems.push({ x, y, value, vx: rand(-40, 40), vy: rand(-40, 40), mag: false, t: 0 });
 }
-const PICKUP_COLOR = { heal: GR, magnet: BL, bomb: OR, prism: CY, nectar: GR, cleansave: MA, tempo: CY, singularity: PU };
-function spawnPickup(x, y, type) {
-  G.pickups.push({ x, y, type, t: 0, vy: 0 });
+const PICKUP_COLOR = { heal: GR, magnet: BL, bomb: OR, prism: CY, nectar: GR, cleansave: MA, tempo: CY, singularity: PU, glyph: YE, ascendant: WH };
+function spawnPickup(x, y, type, opts) {
+  const p = { x, y, type, t: 0, vy: 0 };
+  if (opts) Object.assign(p, opts);
+  G.pickups.push(p);
 }
 
 function updateGems(dt) {
@@ -2497,7 +2802,7 @@ function updatePickups(dt) {
     const p = arr[i];
     p.t += dt;
     if (dist(p.x, p.y, player.x, player.y) < player.r + 18) {
-      applyPickup(p.type);
+      applyPickup(p.type, p);
       arr.splice(i, 1);
     }
   }
@@ -2522,7 +2827,7 @@ function updateBuffs(dt) {
   }
 }
 const BUFF_TRIPLE_T = 12, BUFF_NECTAR_T = 12, BUFF_AURA_T = 10, CLEANSAVE_INVULN = 2.5, TEMPO_MUL = 1.08;
-function applyPickup(type) {
+function applyPickup(type, p) {
   if (type === 'heal') {
     player.hp = Math.min(player.maxHp, player.hp + player.maxHp * 0.3);
     floater(player.x, player.y - 24, '+HP', GR, 18); sfx('coin');
@@ -2564,6 +2869,27 @@ function applyPickup(type) {
     player.buffT.aura = BUFF_AURA_T; player.buffT.auraTick = 0;
     floater(player.x, player.y - 24, 'SINGULARITY', PU, 18); sfx('coin');
     for (let i = 0; i < 16; i++) spawnParticle(player.x, player.y, rand(-130, 130), rand(-130, 130), 0.6, 3, PU, 'spark');
+  } else if (type === 'glyph') {            // ARCHITECT Glyph Fragment (Section D)
+    if (p && p.glyphId) G.glyphs[p.glyphId] = true;
+    const n = Object.keys(G.glyphs).length;
+    floater(player.x, player.y - 24, 'GLYPH ' + n + '/' + BOSS_IDS.length, YE, 18); sfx('coin');
+    for (let i = 0; i < 14; i++) spawnParticle(player.x, player.y, rand(-120, 120), rand(-120, 120), 0.5, 3, YE, 'spark');
+    if (n >= BOSS_IDS.length && G.sigil === 0) {
+      G.sigil = 1;
+      G.bossBanner = { name: 'THE SIGIL IS FORGED', life: 3.0, max: 3.0 };
+      floater(player.x, player.y - 48, IS_TOUCH ? 'TAP THE SIGIL TO SUMMON' : 'PRESS G TO SUMMON', WH, 14);
+      sfx('levelup');
+    }
+  } else if (type === 'ascendant') {        // legendary: the Ascendant Core
+    player.stats.damageMul *= ASCENDANT_DMG;
+    player.stats.attackSpeedMul *= ASCENDANT_AS;
+    player.hp = player.maxHp;
+    player.invuln = Math.max(player.invuln, ASCENDANT_INVULN);
+    floater(player.x, player.y - 24, 'ASCENDANT CORE', WH, 22); sfx('levelup');
+    for (let i = 0; i < 40; i++) {
+      const a = rand(0, TAU);
+      spawnParticle(player.x, player.y, Math.cos(a) * rand(80, 380), Math.sin(a) * rand(80, 380), rand(0.5, 1.0), rand(2, 5), pick([WH, PU, CY, MA]), 'spark');
+    }
   }
 }
 
@@ -2710,6 +3036,17 @@ function update(dt) {
 
   // bomb aftermath: spawn pressure climbs back progressively, never snaps
   if (G.spawnRamp < 1) G.spawnRamp = Math.min(1, G.spawnRamp + dt / BOMB_RAMP_TIME);
+
+  // ARCHITECT summoning ritual: rumble + matter streaming into the portal
+  if (G.ritual) {
+    G.ritual.t -= dt;
+    G.shake = Math.min(1, G.shake + dt * 0.25);
+    if (Math.random() < 0.7) {
+      const a = rand(0, TAU), rr = rand(200, 480);
+      spawnParticle(Math.cos(a) * rr, Math.sin(a) * rr, -Math.cos(a) * 320, -Math.sin(a) * 320, 0.5, 3, pick([PU, MA, CY]), 'spark');
+    }
+    if (G.ritual.t <= 0) { G.ritual = null; spawnArchitect(); }
+  }
 
   // spawn waves / bosses
   director(dt);
@@ -2879,6 +3216,22 @@ function render() {
     ctx.globalCompositeOperation = 'source-over';
   }
 
+  // ARCHITECT summoning portal at the arena center (Section D)
+  if (G.ritual) {
+    const k = 1 - G.ritual.t / ARCH_RITUAL;            // 0 -> 1 as it tears open
+    const R = 60 + 200 * k;
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 3; i++) {
+      ctx.strokeStyle = rgba([PU, MA, CY][i], 0.5); ctx.lineWidth = 3;
+      const a0 = G.time * (2 + i);
+      ctx.beginPath(); ctx.arc(0, 0, R * (0.6 + i * 0.25), a0, a0 + 4.2); ctx.stroke();
+    }
+    glow(0, 0, R, PU, 0.35 + 0.25 * Math.sin(G.time * 7));
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = rgba('#05030f', 0.5 + 0.4 * k);    // the void behind the swarm
+    ctx.beginPath(); ctx.arc(0, 0, R * 0.55, 0, TAU); ctx.fill();
+  }
+
   /* ---- additive GLOW pass ---- */
   ctx.globalCompositeOperation = 'lighter';
 
@@ -2976,6 +3329,12 @@ function render() {
       ctx.beginPath(); ctx.moveTo(-5, -4); ctx.lineTo(0, 0); ctx.lineTo(-5, 4); ctx.moveTo(0, -4); ctx.lineTo(5, 0); ctx.lineTo(0, 4); ctx.stroke();
     } else if (p.type === 'singularity') {   // ring + core
       ctx.beginPath(); ctx.arc(0, 0, 5, 0, TAU); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, 2, 0, TAU); ctx.fill();
+    } else if (p.type === 'glyph') {         // rune shard (diamond + dot)
+      poly(0, 0, 6, 4, Math.PI / 4); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, 1.8, 0, TAU); ctx.fill();
+    } else if (p.type === 'ascendant') {     // radiant core
+      star(0, 0, 7, 5, p.t * 2, 0.45); ctx.stroke();
       ctx.beginPath(); ctx.arc(0, 0, 2, 0, TAU); ctx.fill();
     }
     ctx.restore();
@@ -3191,6 +3550,32 @@ function drawHUD() {
     ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
   }
 
+  // SIGIL inventory slot (Section D) — appears once the first glyph drops
+  {
+    const glyphN = Object.keys(G.glyphs).length;
+    if (glyphN > 0 && G.sigil < 2) {
+      const sx = W - 56, sy = H - (IS_TOUCH ? 148 : 72);
+      G.sigilUI = { x: sx, y: sy, r: 26 };
+      const forged = G.sigil === 1;
+      const pulse = forged ? 0.75 + 0.25 * Math.sin(G.time * 5) : 0.45;
+      ctx.fillStyle = rgba(PU, forged ? 0.30 : 0.10);
+      ctx.strokeStyle = rgba(forged ? PU : WH, pulse); ctx.lineWidth = 2;
+      poly(sx, sy, 24, 6, forged ? G.time * 1.2 : 0.2); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = forged ? WH : rgba(WH, 0.6); ctx.lineWidth = 2;
+      star(sx, sy, 9, 4, G.time * 0.4, 0.5); ctx.stroke();
+      for (let i = 0; i < BOSS_IDS.length; i++) {       // glyph progress pips
+        const a = -Math.PI / 2 + i / BOSS_IDS.length * TAU;
+        ctx.fillStyle = i < glyphN ? YE : rgba(WH, 0.18);
+        ctx.beginPath(); ctx.arc(sx + Math.cos(a) * 31, sy + Math.sin(a) * 31, 3, 0, TAU); ctx.fill();
+      }
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = rgba(WH, forged ? 0.8 : 0.5);
+      ctx.font = '700 10px Segoe UI, sans-serif';
+      ctx.fillText(forged ? (IS_TOUCH ? 'SUMMON' : 'G — SUMMON') : glyphN + '/' + BOSS_IDS.length, sx, sy + 42);
+      ctx.textBaseline = 'alphabetic';
+    } else G.sigilUI = null;
+  }
+
   // GLITCH boss screen overlay (cheap channel-split scanlines)
   if (G.glitchFX > 0) {
     const a = G.glitchFX;
@@ -3254,6 +3639,7 @@ function startGame() {
     kills: 0, score: 0, combo: 0, comboTimer: 0,
     pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: FIRST_BOSS_AT, bossNum: 0, bossBag: [], bossBanner: null, bossTier: 0,
     dirIntensity: 1, dirStress: 0, dirKps: 0, dirDps: 0, spawnRamp: 1,
+    glyphs: {}, sigil: 0, ritual: null, sigilUI: null,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });
   enemyId = 1;
@@ -3265,6 +3651,8 @@ function startGame() {
   player.stats = freshStats();
   recalc(); player.hp = player.maxHp;
   addWeapon('pulse');
+  // permanent meta unlock: slaying THE ARCHITECT grants a head start every run
+  if (META.architectSlain) { G.rerolls += 1; player.stats.damageMul *= META_ARCH_DMG; }
   G.cam.x = 0; G.cam.y = 0;
   hideOverlays();
   if (Sound) { Sound.startMusic(); Sound.setIntensity(0); Sound.setMusicTempo(112); }
@@ -3312,7 +3700,8 @@ function toTitle() {
 function showTitle() {
   const b = G.best;
   document.getElementById('titleHi').textContent =
-    (b.score ? `Best: ${b.score.toLocaleString()} pts · ${fmtTime(b.time)} survived` : 'No record yet — set one.');
+    (b.score ? `Best: ${b.score.toLocaleString()} pts · ${fmtTime(b.time)} survived` : 'No record yet — set one.') +
+    (META.architectSlain ? '  ·  ◆ ARCHITECT SLAIN' : '');
   showOverlay('title');
 }
 
