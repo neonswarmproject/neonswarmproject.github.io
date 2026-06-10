@@ -178,8 +178,49 @@ const _wq = [], _wq2 = []; // dedicated buffers for the new weapons (never clobb
    4. GAME STATE
    ========================================================================= */
 const MAX_ENEMIES = 380;
-const MAX_PARTICLES = 1400;
 const MAX_EPROJ = 1200;      // enemy-bullet cap; drop oldest so bullet-hell phases stay smooth on mobile
+
+/* ---- v2 ADAPTIVE PERFORMANCE (Section I): the fixed particle cap is gone.
+   Startup classifies the device into a tier (cores + memory + DPR/screen) for
+   an initial particle/effect budget; at runtime a rolling FPS sample nudges
+   the budget up or down to hold ~60fps (graceful at 30 on weak devices).
+   Telegraphs and enemy bullets are gameplay signal — they are NEVER culled. */
+const PERF_TIER_BUDGET = [500, 900, 1400, 2200];  // particle budget per tier 0..3
+const PERF_FPS_TARGET = 55;       // comfortable: budget may recover
+const PERF_FPS_LOW = 45;          // struggling: budget gets cut
+const PERF_SAMPLE_T = 1.0;        // s per FPS sample window
+const PERF_STEP = 0.85;           // cut multiplier
+const PERF_RECOVER = 1.06;        // recovery multiplier
+const PERF_MIN_PARTICLES = 220;
+const PERF = { tier: 2, particleBudget: 1400, budgetMax: 1400, fxLevel: 1, frames: 0, accum: 0 };
+function initPerf() {
+  const cores = navigator.hardwareConcurrency || 4;
+  const mem = navigator.deviceMemory || 4;
+  const dpr = window.devicePixelRatio || 1;
+  const small = Math.min(screen.width, screen.height) < 800;
+  let score = 0;
+  score += cores >= 8 ? 2 : cores >= 4 ? 1 : 0;
+  score += mem >= 8 ? 2 : mem >= 4 ? 1 : 0;
+  if (dpr > 2 && small) score -= 1;     // tiny high-DPI screens pay a fill-rate tax
+  PERF.tier = clamp(small ? Math.min(score, 2) : score, 0, 3);
+  PERF.budgetMax = PERF_TIER_BUDGET[PERF.tier];
+  PERF.particleBudget = PERF.budgetMax;
+  PERF.fxLevel = PERF.tier >= 2 ? 1 : PERF.tier === 1 ? 0.7 : 0.45;
+}
+initPerf();
+function perfSample(dt) {
+  PERF.frames++; PERF.accum += dt;
+  if (PERF.accum < PERF_SAMPLE_T) return;
+  const fps = PERF.frames / PERF.accum;
+  PERF.frames = 0; PERF.accum = 0;
+  if (fps < PERF_FPS_LOW) {
+    PERF.particleBudget = Math.max(PERF_MIN_PARTICLES, Math.floor(PERF.particleBudget * PERF_STEP));
+    PERF.fxLevel = Math.max(0.3, PERF.fxLevel * 0.92);
+  } else if (fps > PERF_FPS_TARGET && PERF.particleBudget < PERF.budgetMax) {
+    PERF.particleBudget = Math.min(PERF.budgetMax, Math.ceil(PERF.particleBudget * PERF_RECOVER));
+    PERF.fxLevel = Math.min(PERF.tier >= 2 ? 1 : 0.8, PERF.fxLevel * 1.03);
+  }
+}
 
 const G = {
   state: 'title',                 // title | playing | levelup | paused | gameover
@@ -2796,7 +2837,7 @@ function updateEnemyProjectiles(dt) {
    11. COMBAT RESOLUTION / PARTICLES / PICKUPS / XP
    ========================================================================= */
 function spawnParticle(x, y, vx, vy, life, r, color, kind) {
-  if (G.particles.length >= MAX_PARTICLES) G.particles.shift();
+  if (G.particles.length >= PERF.particleBudget) G.particles.shift();
   G.particles.push({ x, y, vx, vy, life, max: life, r, color, kind: kind || 'spark', drag: 0.92 });
 }
 function floater(x, y, text, color, size) {
@@ -2805,7 +2846,7 @@ function floater(x, y, text, color, size) {
 }
 function explodeAt(x, y, radius, color) {
   G.particles.push({ x, y, vx: 0, vy: 0, r: 8, mr: radius, life: 0.4, max: 0.4, color, kind: 'ring' });
-  for (let i = 0; i < 16; i++) {
+  for (let i = 0, n = Math.max(6, Math.round(16 * PERF.fxLevel)); i < n; i++) {
     const a = rand(0, TAU), s = rand(60, 320);
     spawnParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(0.25, 0.55), rand(2, 5), color, 'spark');
   }
@@ -3131,7 +3172,7 @@ function updateProjectiles(dt) {
     }
 
     p.x += p.vx * dt; p.y += p.vy * dt;
-    if (p.trail && Math.random() < 0.6) spawnParticle(p.x, p.y, 0, 0, 0.18, p.r * 0.7, p.color, 'spark');
+    if (p.trail && Math.random() < 0.6 * PERF.fxLevel) spawnParticle(p.x, p.y, 0, 0, 0.18, p.r * 0.7, p.color, 'spark');
 
     // flak shells & vortex orbs deal no contact damage; their effect is on a timer
     if (p.kind !== 'flak' && p.kind !== 'vortex') {
@@ -3258,8 +3299,8 @@ function update(dt) {
   if (Math.hypot(player.vx, player.vy) > 30) player.aim = Math.atan2(player.vy, player.vx);
   else { const t = nearestEnemy(player.x, player.y); if (t) player.aim = angTo(player.x, player.y, t.x, t.y); }
 
-  // thruster particles
-  if (Math.hypot(player.vx, player.vy) > 40 && Math.random() < 0.7) {
+  // thruster particles (budget-aware)
+  if (Math.hypot(player.vx, player.vy) > 40 && Math.random() < 0.7 * PERF.fxLevel) {
     const a = Math.atan2(player.vy, player.vx) + Math.PI;
     spawnParticle(player.x + Math.cos(a) * 10, player.y + Math.sin(a) * 10, Math.cos(a) * rand(30, 90) + rand(-20, 20), Math.sin(a) * rand(30, 90) + rand(-20, 20), rand(0.2, 0.4), rand(1.5, 3), CY, 'spark');
   }
@@ -3420,8 +3461,12 @@ function render() {
   /* ---- additive GLOW pass ---- */
   ctx.globalCompositeOperation = 'lighter';
 
-  // gems
-  for (const g of G.gems) glow(g.x, g.y, 7, GR, 0.8);
+  // gems (glow pass thins out on weak devices; the crisp body pass never does)
+  for (let i = 0; i < G.gems.length; i++) {
+    if (PERF.fxLevel < 0.6 && (i & 1)) continue;
+    const g = G.gems[i];
+    glow(g.x, g.y, 7, GR, 0.8);
+  }
   // pickups
   for (const p of G.pickups) { const c = PICKUP_COLOR[p.type] || WH; glow(p.x, p.y, 16 + Math.sin(p.t * 6) * 3, c, 0.9); }
   // enemy projectiles
@@ -3962,6 +4007,7 @@ let lastT = performance.now();
 function frame(now) {
   let dt = (now - lastT) / 1000;
   lastT = now;
+  if (dt < 0.5) perfSample(dt);      // rolling FPS sample (ignore tab-switch gaps)
   if (dt > 0.05) dt = 0.05;          // clamp big gaps (tab switches)
   update(dt);
   render();
