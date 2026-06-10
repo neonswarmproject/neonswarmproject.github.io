@@ -25,8 +25,8 @@
 'use strict';
 
 // Single source of truth for the build version (shown discreetly on the title
-// screen). Bump the minor by 0.1 for each completed prompt.
-const VERSION = '1.5';
+// screen). Becomes '2.0' when the human approves the refine/v2 preview.
+const VERSION = '2.0-rc1';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
