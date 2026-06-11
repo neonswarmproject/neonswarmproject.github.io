@@ -24,8 +24,8 @@ for every tunable. Zero console errors desktop + mobile.
 - [x] Q1 Game-over restart on ENTER only (v2.1) — keyboard restart ENTER-only,
       0.7s tap/click grace on "Run it back" so mobile double-tap dash can't
       tap-through, desktop-only ENTER hint on the death screen
-- [ ] Q2 Remove the "Pure HTML5 Canvas + Web Audio · no images, no libraries,
-      all code" footer from the title screen (KEEP the #verTag version span)
+- [x] Q2 Removed the "Pure HTML5 Canvas…" footer from the title screen,
+      #verTag version span kept (v2.2)
 - [ ] Q3 Title-screen ads: AdSense loader (client ca-pub-9117893594553497) + 4
       rectangle ad units, one per rectangle; slots configurable at the top of
       index.html; graceful styled placeholder when a slot is unset; hidden

@@ -4,6 +4,11 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v2.2 — 2026-06-11 — Title cleanup
+
+- Removed the "Pure HTML5 Canvas + Web Audio · no images, no libraries, all
+  code" footer from the title screen (the discreet version tag stays).
+
 ## v2.1 — 2026-06-11 — ENTER-only restart
 
 - Game-over restart is **ENTER-only**: Space/Shift are the dash keys, so dying

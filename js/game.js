@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '2.1';
+const VERSION = '2.2';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
