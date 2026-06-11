@@ -39,7 +39,8 @@ for every tunable. Zero console errors desktop + mobile.
 - [x] C2 Boss absolutes (v2.5): 2× HP everywhere (incl. ARCHITECT 48k),
       PLAYER_VS_BOSS=0.75 at the damageEnemy funnel; verified no build inputs
       reach boss stats (mercy + director already exclude bosses)
-- [ ] C3 Boss rotating lasers +110% damage
+- [x] C3 Boss rotating lasers +110% damage (v2.6) — B_BEAM 0.8→1.68 covers
+      all four laser attacks (OVERLORD/PRISM/GLITCH/ARCHITECT)
 - [ ] C4 PRISM and HIVE anti-orbit redesign — circling them must stop working
       (punish constant-radius movement; force engagement)
 - [ ] C5 Five NEW weapons, all late-game unlocks (gated by run progress, not

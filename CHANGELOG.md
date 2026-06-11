@@ -4,6 +4,13 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v2.6 — 2026-06-11 — Boss lasers +110%
+
+- `B_BEAM` 0.8 → 1.68: every rotating/sweeping boss laser (OVERLORD's sweep,
+  PRISM's refraction beams, GLITCH's pixel-sort band, THE ARCHITECT's quad
+  sweep) hits for just over double. All of them are telegraphed — respect the
+  telegraph or pay for it.
+
 ## v2.5 — 2026-06-11 — Boss absolutes
 
 - Every boss's HP **doubled** (roster base 950 → 1900; THE ARCHITECT

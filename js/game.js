@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '2.5';
+const VERSION = '2.6';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -1730,7 +1730,10 @@ const BOSS_SWEEP_HITSTOP  = 0.10, BOSS_SWEEP_SHAKE = 0.9;
 const BOSS_PHASE_SHAKE = 0.4;
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
 // attack damage as fractions of the boss's own (already diff-scaled) e.dmg
-const B_BULLET = 0.5, B_BEAM = 0.8, B_NOVA = 0.9;
+// C3 (v2.6): B_BEAM 0.8 -> 1.68 (+110%) — rotating/sweeping boss lasers
+// (OVERLORD, PRISM, GLITCH band, ARCHITECT) now actually hurt. They are all
+// telegraphed, so the answer is "don't stand in the laser".
+const B_BULLET = 0.5, B_BEAM = 1.68, B_NOVA = 0.9;
 // C2 (v2.5): the player hits bosses for 25% less — duels are won by dodging
 // and sustained pressure, not by out-statting the boss. Bosses themselves take
 // no input from the player's build anywhere (mercy + director exclude them).
