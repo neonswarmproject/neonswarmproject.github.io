@@ -34,7 +34,8 @@ for every tunable. Zero console errors desktop + mobile.
       slot numbers into window.NEON_ADS to activate.
 
 ### Combat & progression
-- [ ] C1 ALL player weapon ranges −25% (attacks must not outrange bosses)
+- [x] C1 ALL player weapon ranges −25% (v2.4) — global WRANGE=0.75 at every
+      range site incl. acquisition radii + FOCUS_LEAD_R; AoE sizes untouched
 - [ ] C2 Boss absolutes: remove build-based boss balancing entirely; 2× every
       boss's HP; player damage TO bosses −25%
 - [ ] C3 Boss rotating lasers +110% damage

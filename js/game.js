@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '2.3';
+const VERSION = '2.4';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -477,11 +477,17 @@ function moveVector() {
   return { x: 0, y: 0, mag: 0, src: 'none' };
 }
 
+// C1 (v2.4): global weapon-REACH multiplier — every player attack's range is
+// cut 25% so builds can never outrange bosses. Applied at each weapon's
+// range-defining site (projectile travel life, beam length, aura/orbit radius,
+// target acquisition). AoE blast sizes and field durations are untouched.
+const WRANGE = 0.75;
+
 /* ---- v2 FOCUS TARGET (Section H): tap/click a creature to focus it; auto-
    aiming weapons prefer the focus while it lives. Same creature toggles off,
    another switches. Empty space never clears (no accidental drops). ---- */
 const FOCUS_PICK_R = 34;       // screen px — generous pick radius
-const FOCUS_LEAD_R = 800;      // world px — focus must be this close to the querying
+const FOCUS_LEAD_R = 800 * WRANGE; // world px — focus must be this close to the querying
                                // weapon/anchor to steal aim (≈ max projectile reach)
 function effZoom() { return (1 + G.dashZoom) * camZoom; }    // the ONE world<->screen scale
 // radius of the visible world circle — matches the off-screen spawn ring
@@ -674,7 +680,7 @@ const WEAPONS = {
         a += (i - (count - 1) / 2) * 0.12;
         firePlayerProjectile({
           x: player.x, y: player.y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
-          r: 6, dmg, pierce, life: 1.4 * S().projDurMul, color: CY, hit: new Set(), trail: 1
+          r: 6, dmg, pierce, life: 1.4 * WRANGE * S().projDurMul, color: CY, hit: new Set(), trail: 1
         });
       }
       // muzzle flash (Section J)
@@ -698,7 +704,7 @@ const WEAPONS = {
       const lv = self.level;
       if (!self.data) self.data = { ang: 0, hits: new Map() };
       const count = 2 + (lv >= 2 ? 1 : 0) + (lv >= 4 ? 1 : 0) + (lv >= 6 ? 1 : 0) + (lv >= 8 ? 1 : 0) + (lv >= 10 ? 1 : 0);
-      const radius = (78 + (lv >= 4 ? 26 : 0) + (lv >= 7 ? 40 : 0) + (lv >= 9 ? 30 : 0) + (lv >= 11 ? 36 : 0)) * Math.sqrt(S().areaMul);
+      const radius = (78 + (lv >= 4 ? 26 : 0) + (lv >= 7 ? 40 : 0) + (lv >= 9 ? 30 : 0) + (lv >= 11 ? 36 : 0)) * Math.sqrt(S().areaMul) * WRANGE;
       const spin = (2.0 + (lv >= 5 ? 1.1 : 0) + (lv >= 10 ? 0.8 : 0)) * S().attackSpeedMul;
       const dmg = 9 * (1 + (lv >= 3 ? 0.4 : 0) + (lv >= 5 ? 0.4 : 0) + (lv >= 7 ? 0.7 : 0) + (lv >= 9 ? 0.5 : 0) + (lv >= 11 ? 0.7 : 0)) * S().damageMul * dt * 6;
       self.data.ang += spin * dt;
@@ -745,7 +751,7 @@ const WEAPONS = {
       const cd = (2.4 - (lv >= 4 ? 0.6 : 0) - (lv >= 9 ? 0.4 : 0)) / S().attackSpeedMul;
       if (self.t > 0) return;
       self.t = cd;
-      const radius = (120 + (lv >= 2 ? 40 : 0) + (lv >= 5 ? 60 : 0) + (lv >= 7 ? 90 : 0) + (lv >= 8 ? 50 : 0) + (lv >= 11 ? 80 : 0)) * S().areaMul;
+      const radius = (120 + (lv >= 2 ? 40 : 0) + (lv >= 5 ? 60 : 0) + (lv >= 7 ? 90 : 0) + (lv >= 8 ? 50 : 0) + (lv >= 11 ? 80 : 0)) * S().areaMul * WRANGE;
       const dmg = 16 * (1 + (lv >= 3 ? 0.45 : 0) + (lv >= 6 ? 0.45 : 0) + (lv >= 7 ? 0.6 : 0) + (lv >= 10 ? 0.5 : 0)) * S().damageMul;
       grid.query(player.x, player.y, radius, _q);
       for (let i = 0; i < _q.length; i++) {
@@ -774,7 +780,7 @@ const WEAPONS = {
       self.t = (self.t || 0) - dt;
       const cd = (1.4 - (lv >= 4 ? 0.45 : 0) - (lv >= 9 ? 0.3 : 0)) / S().attackSpeedMul;
       if (self.t > 0) return;
-      const first = nearestEnemy(player.x, player.y, 460);
+      const first = nearestEnemy(player.x, player.y, 460 * WRANGE);
       if (!first) { self.t = 0.2; return; }
       self.t = cd;
       const jumps = 3 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 2 : 0) + (lv >= 7 ? 2 : 0) + (lv >= 9 ? 2 : 0) + (lv >= 11 ? 2 : 0);
@@ -789,8 +795,8 @@ const WEAPONS = {
         hitSet.add(cur.id);
         dmg *= 0.82;
         // next nearest unhit within range
-        let next = null, bd = 220 ** 2;
-        grid.query(cur.x, cur.y, 240, _q);
+        let next = null, bd = (220 * WRANGE) ** 2;
+        grid.query(cur.x, cur.y, 240 * WRANGE, _q);
         for (let i = 0; i < _q.length; i++) {
           const e = _q[i];
           if (e.dead || hitSet.has(e.id)) continue;
@@ -827,7 +833,7 @@ const WEAPONS = {
         const a = rand(0, TAU);
         firePlayerProjectile({
           x: player.x, y: player.y, vx: Math.cos(a) * 120, vy: Math.sin(a) * 120,
-          r: 5, dmg, pierce: 0, life: 2.4 * S().projDurMul, color: OR,
+          r: 5, dmg, pierce: 0, life: 2.4 * WRANGE * S().projDurMul, color: OR,
           kind: 'missile', homing: 6.5, blast, hit: new Set(), trail: 1
         });
       }
@@ -851,10 +857,10 @@ const WEAPONS = {
       const cd = (1.05 - (lv >= 4 ? 0.3 : 0) - (lv >= 9 ? 0.22 : 0)) / S().attackSpeedMul;
       if (self.t > 0) return;
       const beams = 1 + (lv >= 5 ? 1 : 0) + (lv >= 7 ? 1 : 0) + (lv >= 9 ? 1 : 0) + (lv >= 11 ? 1 : 0);
-      const target = nearestEnemy(player.x, player.y, 1200);
+      const target = nearestEnemy(player.x, player.y, 1200 * WRANGE);
       if (!target) { self.t = 0.2; return; }
       self.t = cd;
-      const len = (520 + (lv >= 5 ? 180 : 0) + (lv >= 8 ? 160 : 0)) * S().areaMul;
+      const len = (520 + (lv >= 5 ? 180 : 0) + (lv >= 8 ? 160 : 0)) * S().areaMul * WRANGE;
       const wid = (16 + (lv >= 2 ? 8 : 0) + (lv >= 10 ? 8 : 0)) * Math.sqrt(S().areaMul);
       const dmg = 26 * (1 + (lv >= 3 ? 0.45 : 0) + (lv >= 6 ? 0.45 : 0) + (lv >= 7 ? 0.6 : 0) + (lv >= 11 ? 0.6 : 0)) * S().damageMul;
       const baseA = angTo(player.x, player.y, target.x, target.y);
@@ -887,7 +893,7 @@ const WEAPONS = {
     },
     update(self, dt) {
       const lv = self.level;
-      const radius = (110 + (lv >= 2 ? 35 : 0) + (lv >= 4 ? 45 : 0) + (lv >= 6 ? 70 : 0) + (lv >= 8 ? 45 : 0) + (lv >= 10 ? 60 : 0)) * S().areaMul;
+      const radius = (110 + (lv >= 2 ? 35 : 0) + (lv >= 4 ? 45 : 0) + (lv >= 6 ? 70 : 0) + (lv >= 8 ? 45 : 0) + (lv >= 10 ? 60 : 0)) * S().areaMul * WRANGE;
       const slow = 0.42 + (lv >= 3 ? 0.12 : 0) + (lv >= 6 ? 0.12 : 0) + (lv >= 9 ? 0.08 : 0);
       const dps = (FROST_DPS_BASE + (lv >= 3 ? 4 : 0) + (lv >= 5 ? 6 : 0) + (lv >= 7 ? 6 : 0) + (lv >= 10 ? 8 : 0)) * S().damageMul;
       G.frost = { radius, slow, dmg: dps };
@@ -931,9 +937,9 @@ const WEAPONS = {
       const dmg = 14 * (1 + (lv >= 2 ? 0.45 : 0) + (lv >= 5 ? 0.45 : 0) + (lv >= 8 ? 0.5 : 0)) * S().damageMul;
       const pr = 4 + (lv >= 4 ? 2 : 0) + (lv >= 7 ? 3 : 0);
       const rr = (10 + (lv >= 4 ? 3 : 0) + (lv >= 7 ? 4 : 0)) * Math.sqrt(S().areaMul);
-      const reach = (320 + (lv >= 6 ? 120 : 0)) * S().areaMul;
+      const reach = (320 + (lv >= 6 ? 120 : 0)) * S().areaMul * WRANGE;
       const spd = 470 * S().projSpeedMul;
-      const base = nearestEnemy(player.x, player.y, 1400);
+      const base = nearestEnemy(player.x, player.y, 1400 * WRANGE);
       const baseA = base ? angTo(player.x, player.y, base.x, base.y) : player.aim;
       for (let i = 0; i < count; i++) {
         const a = baseA + (i - (count - 1) / 2) * 0.4;
@@ -1036,12 +1042,12 @@ const WEAPONS = {
       const cd = (3.2 - (lv >= 4 ? 0.6 : 0)) / S().attackSpeedMul;
       if (self.t > 0) return;
       self.t = cd;
-      const target = nearestEnemy(player.x, player.y, 1100);
+      const target = nearestEnemy(player.x, player.y, 1100 * WRANGE);
       const a = target ? angTo(player.x, player.y, target.x, target.y) : player.aim;
       const spd = 185 * S().projSpeedMul;
       firePlayerProjectile({
         x: player.x, y: player.y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
-        r: 10, dmg: 0, pierce: 0, life: 1.5 * S().projDurMul, color: PU, kind: 'vortex',
+        r: 10, dmg: 0, pierce: 0, life: 1.5 * WRANGE * S().projDurMul, color: PU, kind: 'vortex',
         _w: self, maxZones: 1 + (lv >= 5 ? 1 : 0) + (lv >= 8 ? 1 : 0),
         zoneR: (120 + (lv >= 3 ? 40 : 0) + (lv >= 7 ? 60 : 0)) * S().areaMul,
         zoneDur: 3.0 + (lv >= 2 ? 1.0 : 0) + (lv >= 6 ? 1.5 : 0),
@@ -1079,13 +1085,13 @@ const WEAPONS = {
       const cd = (1.6 - (lv >= 4 ? 0.4 : 0)) / S().attackSpeedMul;
       if (self.t > 0) return;
       self.t = cd;
-      const target = nearestEnemy(player.x, player.y, 1000);
+      const target = nearestEnemy(player.x, player.y, 1000 * WRANGE);
       const a = target ? angTo(player.x, player.y, target.x, target.y) : player.aim;
       const spd = 430 * S().projSpeedMul;
       const shr = 5 + (lv >= 2 ? 2 : 0) + (lv >= 5 ? 3 : 0) + (lv >= 8 ? 4 : 0);
       const dmg = FLAK_DMG_BASE * (1 + (lv >= 3 ? 0.4 : 0) + (lv >= 6 ? 0.45 : 0)) * S().damageMul;
       const spread = 0.6 + (lv >= 4 ? 0.3 : 0) + (lv >= 7 ? 0.5 : 0);
-      const life0 = 0.55 * S().projDurMul;
+      const life0 = 0.55 * WRANGE * S().projDurMul;
       firePlayerProjectile({ x: player.x, y: player.y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, r: 6, dmg: 0, pierce: 0, life: life0, life0, color: YE, kind: 'flak', shr, shrDmg: dmg, shrSpread: spread, aimA: a, burst: false });
       sfx('laser');
     }
@@ -1107,7 +1113,7 @@ const WEAPONS = {
       const cd = (0.9 - (lv >= 5 ? 0.25 : 0)) / S().attackSpeedMul;
       if (self.t > 0) return;
       self.t = cd;
-      const range = (150 + (lv >= 4 ? 40 : 0) + (lv >= 7 ? 50 : 0)) * Math.sqrt(S().areaMul);
+      const range = (150 + (lv >= 4 ? 40 : 0) + (lv >= 7 ? 50 : 0)) * Math.sqrt(S().areaMul) * WRANGE;
       const half = 0.7 + (lv >= 3 ? 0.25 : 0) + (lv >= 6 ? 0.3 : 0);
       const dmg = (WHIP_DMG_BASE + (lv >= 2 ? 8 : 0) + (lv >= 5 ? 8 : 0) + (lv >= 8 ? 12 : 0)) * S().damageMul;
       const swipes = 1 + (lv >= 9 ? 1 : 0);
@@ -1156,11 +1162,11 @@ const WEAPONS = {
         if (dr.t <= 0) { d.drones.splice(i, 1); continue; }
         dr.fireT -= dt;
         if (dr.fireT <= 0) {
-          const tgt = nearestEnemy(dr.x, dr.y, 520);
+          const tgt = nearestEnemy(dr.x, dr.y, 520 * WRANGE);
           if (tgt) {
             dr.fireT = fireCd;
             const a = angTo(dr.x, dr.y, tgt.x, tgt.y), spd = 600 * S().projSpeedMul;
-            firePlayerProjectile({ x: dr.x, y: dr.y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, r: 5, dmg, pierce: pr, life: 1.1 * S().projDurMul, color: CY, hit: new Set(), trail: 1 });
+            firePlayerProjectile({ x: dr.x, y: dr.y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, r: 5, dmg, pierce: pr, life: 1.1 * WRANGE * S().projDurMul, color: CY, hit: new Set(), trail: 1 });
             if (Math.random() < 0.25) sfx('shoot');
           } else dr.fireT = 0.2;
         }
@@ -1202,11 +1208,12 @@ const WEAPONS = {
       const strikes = 1 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 2 : 0) + (lv >= 8 ? 2 : 0);
       const dmg = (26 + (lv >= 3 ? 12 : 0) + (lv >= 6 ? 16 : 0)) * S().damageMul;
       const aoe = (70 + (lv >= 6 ? 40 : 0)) * S().areaMul;
-      const reach = viewRadius();
+      const reach = viewRadius() * WRANGE;
       const near = (Math.random() < 0.75) ? nearestEnemies(player.x, player.y, 10) : null;
       for (let s = 0; s < strikes; s++) {
         let tx, ty;
-        const e = near && near.length ? pick(near) : null;
+        let e = near && near.length ? pick(near) : null;
+        if (e && dist2(player.x, player.y, e.x, e.y) > reach * reach) e = null;   // strikes respect reach
         if (e) { tx = e.x + rand(-30, 30); ty = e.y + rand(-30, 30); }
         else { const a = rand(0, TAU), r2 = rand(60, reach); tx = player.x + Math.cos(a) * r2; ty = player.y + Math.sin(a) * r2; }
         grid.query(tx, ty, aoe, _wq);
@@ -1233,10 +1240,10 @@ const WEAPONS = {
       self.t = (self.t || 0) - dt;
       const cd = (1.3 - (lv >= 4 ? 0.35 : 0) - (lv >= 8 ? 0.2 : 0)) / S().attackSpeedMul;
       if (self.t > 0) return;
-      const first = nearestEnemy(player.x, player.y, 1100);
+      const first = nearestEnemy(player.x, player.y, 1100 * WRANGE);
       if (!first) { self.t = 0.2; return; }
       self.t = cd;
-      const len = (560 + (lv >= 7 ? 180 : 0)) * S().areaMul;
+      const len = (560 + (lv >= 7 ? 180 : 0)) * S().areaMul * WRANGE;
       const wid = (12 + (lv >= 2 ? 5 : 0) + (lv >= 6 ? 6 : 0)) * Math.sqrt(S().areaMul);
       const dmg = (24 + (lv >= 3 ? 12 : 0) + (lv >= 8 ? 16 : 0)) * S().damageMul;
       const subN = 2 + (lv >= 5 ? 1 : 0);
@@ -1277,7 +1284,7 @@ const WEAPONS = {
       for (let i = 0; i < orbs; i++) { const a = d.ang + i / orbs * TAU; d.positions.push({ x: player.x + Math.cos(a) * orbitR, y: player.y + Math.sin(a) * orbitR }); }
       d.t -= dt;
       const cd = (1.8 - (lv >= 5 ? 0.5 : 0)) / S().attackSpeedMul;
-      const waveR = (120 + (lv >= 3 ? 50 : 0) + (lv >= 6 ? 70 : 0)) * S().areaMul;
+      const waveR = (120 + (lv >= 3 ? 50 : 0) + (lv >= 6 ? 70 : 0)) * S().areaMul * WRANGE;
       const dmg = (22 + (lv >= 2 ? 10 : 0) + (lv >= 6 ? 16 : 0)) * S().damageMul;
       if (d.t <= 0) {
         d.t = cd;

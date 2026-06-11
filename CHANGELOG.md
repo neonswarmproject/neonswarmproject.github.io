@@ -4,6 +4,19 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v2.4 — 2026-06-11 — All weapon ranges −25%
+
+- New global `WRANGE = 0.75` applied at every weapon's range-defining site:
+  projectile travel (pulse, missiles, glaive, vortex orb, flak fuse, sentry
+  bolts), beam lengths (Photon Lance, Prism Ray), aura/orbit radii (Halo
+  Blades, Shock Pulse, Cryo Field, Pulsar waves, Arc Whip), chain-lightning
+  seek + jump distance, Thunderstorm strike ring (targeted strikes now respect
+  reach too), and every target-acquisition radius.
+- Focus "aim steal" range scales down with it (FOCUS_LEAD_R).
+- AoE blast sizes (missile/mine/flak explosions) and field durations are
+  unchanged — this is a reach cut, not a damage/area nerf. Builds can no
+  longer poke bosses from outside their threat range.
+
 ## v2.3 — 2026-06-11 — Title-screen ads (AdSense)
 
 - AdSense loader (client `ca-pub-9117893594553497`) + four ad rectangles on
