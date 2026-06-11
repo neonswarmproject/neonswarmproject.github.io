@@ -1,6 +1,6 @@
 # NEON SWARM v2 refinement — progress tracker
 
-STATUS: IN-PROGRESS
+STATUS: AWAITING-HUMAN
 Branch: refine/v2 — do NOT push to main; deploy only after human confirmation.
 Each item = one subsystem commit. Keep the game runnable after every commit.
 Reuse existing helpers (G, player, director, diffScale, spawnEnemy, killEnemy,
@@ -51,24 +51,28 @@ for every tunable. Zero console errors desktop + mobile.
       collision edge cases, off-screen cleanup, pause/resume, HUD correctness
 - [x] L — Free improvements: first-run hint, directional damage indicator,
       "boss incoming" banner (in C1), results screen "% of best" row
-- [ ] FINAL — in this exact order:
-      1. Re-run the adversarial review (the first run died on the usage
-         limit with ZERO findings produced — do NOT trust that empty result).
-         Either re-launch the review workflow over `git diff main...refine/v2`
-         or review the diff directly for: runtime errors, boot-order/TDZ
-         issues, state-reset gaps (G literal vs startGame), canvas state
-         leaks, multi-touch Map leaks, camZoom math errors. Fix + commit.
-      2. Playwright smoke test on http://localhost:8123 (server may already
-         be running; restart with `python3 -m http.server 8123` if not):
-         load → zero console errors → click PLAY → set NEON.G.time = 44 via
-         evaluate → boss spawns (sweep + banner + entrance) → teleport boss
-         near player, let it die → ~5 level-ups paid out, farm window opens.
-         Also test at 390x844 viewport. Fix anything broken + commit.
-      3. Bump in-game VERSION const to '2.0-rc1' (NOT 2.0 — that happens at
-         release), commit.
-      4. `open http://localhost:8123` to put the preview in a browser tab.
-      5. Write the human test checklist at the bottom of this file, set
-         STATUS: AWAITING-HUMAN at the top, print OVERNIGHT-DONE, stop.
+- [x] FINAL — completed Jun 11:
+      1. Adversarial review re-run (7 finder angles + per-candidate verify over
+         `git diff main...refine/v2`). 9 confirmed/plausible bugs fixed + 9
+         cleanups applied in commit "v2 FINAL.1": spawn-in/entrance contact
+         gate, archnode mercy exclusion, phase-pause zone-timer desync, banner
+         subtitle, title-tap joystick handoff, double-tap dash false positives,
+         focus range gate (FOCUS_LEAD_R), boss speed time scaling restored,
+         budget-capped spawnRing. Deferred to post-2.0 (noted, low risk):
+         boss attack copy-paste consolidation (comet fan / shard rain / gap
+         ring / beam state machines ×3), per-frame beam-object churn in
+         OVERLORD+ARCHITECT fire windows, boss-as-'tank' ETYPES aliasing.
+         Intended-by-design (verify in human test): zero income during boss
+         fights (every boss owns the arena, no fallback timer).
+      2. Playwright smoke test PASSED: load clean (0 console errors), PLAY,
+         time=44 → OVERLORD spawned from bag (sweep+banner+entrance), boss
+         death paid exactly 5 level-ups + heal + GLYPH (sigil slot appeared,
+         glyphCount cache OK), farm window opened (+75s), 390x844 resize OK,
+         game-over screen + "Run it back" restart OK, spawn-in contact gate
+         verified live (no damage while materializing, normal after).
+      3. VERSION '2.0-rc1' committed.
+      4. Preview opened at http://localhost:8123.
+      5. Human test checklist below — STATUS: AWAITING-HUMAN.
 
 ## Human test checklist (v2.0-rc1 preview — http://localhost:8123)
 
