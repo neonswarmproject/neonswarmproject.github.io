@@ -280,6 +280,24 @@ html, body {
 .go-hint b { color: var(--cyan); }
 @media (pointer: coarse) { .go-hint { display: none; } } /* meaningless on touch */
 
+/* Title-screen ad rectangles (Q3) — absolute children of the #title overlay,
+   so they appear/disappear with it and never exist during gameplay. */
+.ad-rect {
+  position: absolute; z-index: 5;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 10px; overflow: hidden;
+}
+.ad-rect[hidden] { display: none; }
+.ad-top    { top: 10px;    left: 50%; transform: translateX(-50%); width: min(728px, calc(100vw - 24px)); height: 90px; }
+.ad-bottom { bottom: 10px; left: 50%; transform: translateX(-50%); width: min(728px, calc(100vw - 24px)); height: 90px; }
+.ad-left   { left: 10px;  top: 50%; transform: translateY(-50%); width: 160px; height: 600px; }
+.ad-right  { right: 10px; top: 50%; transform: translateY(-50%); width: 160px; height: 600px; }
+@media (max-width: 1180px) { .ad-left, .ad-right { display: none; } } /* would crowd the 720px panel */
+@media (max-height: 680px) { .ad-bottom { display: none; } }
+@media (max-height: 560px) { .ad-top { display: none; } }
+
 /* reduce motion */
 @media (prefers-reduced-motion: reduce) {
   .overlay, .panel, .newbest { animation: none; }

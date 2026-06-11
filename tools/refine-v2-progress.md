@@ -26,10 +26,12 @@ for every tunable. Zero console errors desktop + mobile.
       tap-through, desktop-only ENTER hint on the death screen
 - [x] Q2 Removed the "Pure HTML5 Canvas…" footer from the title screen,
       #verTag version span kept (v2.2)
-- [ ] Q3 Title-screen ads: AdSense loader (client ca-pub-9117893594553497) + 4
-      rectangle ad units, one per rectangle; slots configurable at the top of
-      index.html; graceful styled placeholder when a slot is unset; hidden
-      during gameplay; zero console errors either way
+- [x] Q3 Title-screen ads (v2.3): AdSense loader + 4 rectangles (top/bottom
+      banners, left/right rails) inside the #title overlay; slots configured
+      via window.NEON_ADS in index.html (unset → hidden, no push, no console
+      errors); responsive breakpoints keep the panel uncrowded.
+      NOTE for owner: create 4 display ad units in AdSense and paste their
+      slot numbers into window.NEON_ADS to activate.
 
 ### Combat & progression
 - [ ] C1 ALL player weapon ranges −25% (attacks must not outrange bosses)

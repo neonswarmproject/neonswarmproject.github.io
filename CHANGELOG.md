@@ -4,6 +4,18 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v2.3 — 2026-06-11 — Title-screen ads (AdSense)
+
+- AdSense loader (client `ca-pub-9117893594553497`) + four ad rectangles on
+  the title screen: top banner, bottom banner, left rail, right rail. They
+  live inside the title overlay, so gameplay is always ad-free.
+- Slot IDs are configured in `window.NEON_ADS` at the top of `index.html`
+  (AdSense → Ads → By ad unit → create 4 display units, paste the 4 slot
+  numbers). Unconfigured rectangles stay hidden; nothing is pushed for them,
+  so the console stays clean with or without ads, ad-blockers included.
+- Side rails hide below 1180px width; banners hide on short screens so the
+  panel and PLAY button are never crowded.
+
 ## v2.2 — 2026-06-11 — Title cleanup
 
 - Removed the "Pure HTML5 Canvas + Web Audio · no images, no libraries, all
