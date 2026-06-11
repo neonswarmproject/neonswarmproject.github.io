@@ -52,11 +52,11 @@ FALLBACK_WAIT="${CLAUDE_OVERNIGHT_FALLBACK_WAIT:-1800}"
 RESET_BUFFER=90
 MAX_HARD_FAILS="${CLAUDE_OVERNIGHT_MAX_FAILS:-12}"
 
-PROMPT='Continue the NEON SWARM v2 refinement pass (overnight mode, branch refine/v2).
-1. Read tools/refine-v2-progress.md and find the first unchecked [ ] item.
-2. Implement it fully: reuse existing helpers in js/game.js, named constants for every tunable, zero console errors on desktop AND mobile. Do NOT push to main or deploy.
-3. Tick the item off in tools/refine-v2-progress.md, commit the subsystem with a clear message on refine/v2, then back it up with `git push neon refine/v2`. NEVER push main, never push origin, never deploy.
-4. If ALL items are checked: serve the game locally, verify it loads with no console errors, set "STATUS: AWAITING-HUMAN" at the top of the progress file, print OVERNIGHT-DONE, and stop.'
+PROMPT='Continue the NEON SWARM v2+ content pass (overnight mode, branch main).
+1. Read tools/refine-v2-progress.md and take the FIRST unchecked [ ] item.
+2. Implement it fully at Architect quality: reuse existing helpers in js/game.js, named constants for every tunable, zero console errors on desktop AND mobile.
+3. Bump VERSION by +0.1 in js/game.js, add a CHANGELOG.md entry, tick the item off in tools/refine-v2-progress.md, commit on main with a clear message, then `git push neon main` (standing user authorization, 2026-06-11). NEVER push origin, never force-push.
+4. If ALL items are checked: verify the game loads locally with zero console errors, print OVERNIGHT-DONE, and stop.'
 
 mkdir -p "${STATE_DIR}"
 
@@ -167,8 +167,9 @@ fi
 # Claude does not install this itself (an agent must not widen its own
 # permissions). Merges the scoped overnight allowlist + push-protection DENY
 # rules into this repo's .claude/settings.local.json and prints every rule it
-# adds. Deny rules win over allow rules: main/origin/--force pushes stay
-# impossible for unattended turns.
+# adds. Deny rules win over allow rules: origin/--force pushes stay impossible
+# for unattended turns. Pushing `neon main` is allowed per the standing user
+# authorization of 2026-06-11 (each push deploys the live site).
 if [ "${1:-}" = "--install-permissions" ]; then
   # optional 2nd arg = alternate target file (used for dry-run tests)
   tgt="${2:-${REPO_DIR}/.claude/settings.local.json}"
@@ -180,7 +181,8 @@ ALLOW = [
   "Bash(git checkout *)", "Bash(git switch *)", "Bash(git branch*)",
   "Bash(git log*)", "Bash(git diff*)", "Bash(git show*)",
   "Bash(git tag*)", "Bash(git restore *)", "Bash(git stash*)",
-  "Bash(git push neon refine/v2)",
+  "Bash(git push neon main)", "Bash(git push neon refine/v2)",
+  "Bash(git push neon v*)",
   "Bash(node *)", "Bash(bash -n *)",
   "Bash(python3 -m http.server*)", "Bash(npx playwright *)",
   "Bash(curl http://localhost*)", "Bash(curl -s http://localhost*)",
@@ -188,7 +190,7 @@ ALLOW = [
   "Bash(ls *)", "Bash(tail *)", "Bash(head *)", "Bash(mkdir -p *)",
 ]
 DENY = [
-  "Bash(git push origin*)", "Bash(git push * main*)", "Bash(git push *:main*)",
+  "Bash(git push origin*)",
   "Bash(git push --force*)", "Bash(git push -f *)", "Bash(git push * --force*)",
   "Bash(git push * -f *)",
 ]

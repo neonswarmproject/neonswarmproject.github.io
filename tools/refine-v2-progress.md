@@ -1,110 +1,95 @@
-# NEON SWARM v2 refinement — progress tracker
+# NEON SWARM v2+ content pass — progress tracker
 
-STATUS: AWAITING-HUMAN
-Branch: refine/v2 — do NOT push to main; deploy only after human confirmation.
-Each item = one subsystem commit. Keep the game runnable after every commit.
+STATUS: ACTIVE
+Branch: main — push `neon main` after EVERY item (standing user authorization,
+2026-06-11: "pushing directly to main after each one without waiting for my
+confirmation"). Each push: VERSION +0.1 in js/game.js + CHANGELOG.md entry +
+tick the item here. Keep the game runnable after every commit. NEVER push
+origin, never force-push.
+
 Reuse existing helpers (G, player, director, diffScale, spawnEnemy, killEnemy,
 damageEnemy, applyPickup, updateGems, addXp, moveVector, BOSSES, WEAPONS,
 PASSIVES, grid.query, glow/poly/star/rgba, telegraph helpers). Named constants
 for every tunable. Zero console errors desktop + mobile.
 
-## Checklist (work top to bottom)
+## Shipped
 
-- [x] STEP 0 — overnight wrapper (tools/claude-overnight.sh), statusline shim,
-      this progress file, launch instructions (tools/OVERNIGHT-README.md)
-- [x] B — Adaptive difficulty director: lower early spawn rate/batch, hidden
-      power+stress signals modulating spawns (between-boss windows only),
-      progressive ~25s re-ramp after bomb, guaranteed early card variety,
-      buff under-performing weapons
-- [x] C1 — Boss-rush core: shuffled boss bag (OVERLORD included, no fixed
-      intro), elapsed-time+cycle scaling (not fixed rank), boss spawn sweeps
-      normal enemies with spectacular shockwave (particles/flash/hitstop),
-      director suppressed during fights (boss summons exempt), boss XP ≈ 5
-      levels (fix ~20-level dump)
-- [x] C2 — Boss epic-ness: richer procedural designs, entrance animations,
-      phase-transition cinematics, more telegraphed attack patterns for
-      OVERLORD, PRISM, HIVE, GLITCH, CONDUCTOR, WARDEN (OVERLORD gets special
-      attention)
-- [x] D — THE ARCHITECT: glyph fragments from each roster boss → sigil UI slot
-      → portal ritual → 5-phase screen-dominating super-boss with destructible
-      rune nodes, fixed brutal difficulty, Ascendant Core + permanent meta
-      unlock (extra reroll + damage head start, title-screen badge)
-- [x] E — Enemy levels: Lv scaling starts after first boss cycle/time
-      threshold, "Lv N" badge only when level ≥ 2, named constants
-- [x] F — Movement feel: quick turn response, dash velocity transfer, dash
-      camera zoom + motion trail, i-frames kept, smooth camera lerp
-- [x] G — Mobile overhaul: camera zoom-out factor wired through ALL
-      world<->screen math (magnet radius, spawn ring, telegraphs), true
-      multi-touch (pointerId map), dynamic joystick with dead zone, dash on
-      separate touch/double-tap that never stops movement
-- [x] H — Focus target: G.focusTarget, click/tap creature to focus (toggle /
-      switch), auto-aim weapons prefer focus, tap-vs-drag thresholds on
-      mobile, subtle reticle
-- [x] I — Adaptive performance: device-tier startup budget
-      (hardwareConcurrency/deviceMemory/DPR), rolling-FPS runtime adjustment
-      of particle/glow/telegraph budgets, no per-frame allocations
-- [x] J — Animations everywhere: player (idle/thruster/dash/hurt/level-up),
-      weapons (fire/impact), enemies (spawn-in/death), bosses (already in C2);
-      readability sacred — enemy fire visually distinct
-- [x] K — Bug sweep: weapon info() vs update() audits (off-by-one in ALL
-      weapon cards found & fixed + 4 per-weapon text/threshold mismatches),
-      collision edge cases, off-screen cleanup, pause/resume, HUD correctness
-- [x] L — Free improvements: first-run hint, directional damage indicator,
-      "boss incoming" banner (in C1), results screen "% of best" row
-- [x] FINAL — completed Jun 11:
-      1. Adversarial review re-run (7 finder angles + per-candidate verify over
-         `git diff main...refine/v2`). 9 confirmed/plausible bugs fixed + 9
-         cleanups applied in commit "v2 FINAL.1": spawn-in/entrance contact
-         gate, archnode mercy exclusion, phase-pause zone-timer desync, banner
-         subtitle, title-tap joystick handoff, double-tap dash false positives,
-         focus range gate (FOCUS_LEAD_R), boss speed time scaling restored,
-         budget-capped spawnRing. Deferred to post-2.0 (noted, low risk):
-         boss attack copy-paste consolidation (comet fan / shard rain / gap
-         ring / beam state machines ×3), per-frame beam-object churn in
-         OVERLORD+ARCHITECT fire windows, boss-as-'tank' ETYPES aliasing.
-         Intended-by-design (verify in human test): zero income during boss
-         fights (every boss owns the arena, no fallback timer).
-      2. Playwright smoke test PASSED: load clean (0 console errors), PLAY,
-         time=44 → OVERLORD spawned from bag (sweep+banner+entrance), boss
-         death paid exactly 5 level-ups + heal + GLYPH (sigil slot appeared,
-         glyphCount cache OK), farm window opened (+75s), 390x844 resize OK,
-         game-over screen + "Run it back" restart OK, spawn-in contact gate
-         verified live (no damage while materializing, normal after).
-      3. VERSION '2.0-rc1' committed.
-      4. Preview opened at http://localhost:8123.
-      5. Human test checklist below — STATUS: AWAITING-HUMAN.
+- [x] v2.0 — refinement pass (A–L + FINAL: director, boss-rush core, boss
+      quality pass, THE ARCHITECT, mobile/perf/animation overhauls, bug
+      sweep). Merged to main + tagged 2026-06-11.
 
-## Human test checklist (v2.0-rc1 preview — http://localhost:8123)
+## Checklist (work top to bottom; one commit+push per item)
 
-Desktop:
-- [ ] Title screen loads, version tag reads v2.0-rc1, no console errors (F12)
-- [ ] Early game feels calm (sparse spawns in the first 40s), movement turns
-      feel snappy, dash has a zoom punch + ghost trail and carries momentum
-- [ ] ~45s: swarm disintegrates in a shockwave, WARNING banner, a random boss
-      materializes (entrance animation) and duels you 1-on-1 with telegraphed
-      attacks; beatable with just the starting weapon by dodging
-- [ ] Boss death pays out a gem burst worth ~5 level-ups, drops its buff,
-      a heal, and a yellow GLYPH rune; normal spawns resume gently afterwards
-- [ ] Level-up cards: first picks always include a weapon AND a passive and
-      offer NEW weapons early; card text matches what the upgrade actually does
-- [ ] Click a creature → focus reticle appears, your weapons train on it;
-      click it again → focus off; click another → focus switches
-- [ ] Bomb pickup: field clears, then spawns ramp back over ~25s (no wall)
-- [ ] Survive 6 boss kills → all 6 glyph pips fill on the bottom-right slot →
-      "THE SIGIL IS FORGED" → press G → portal ritual at arena center →
-      THE ARCHITECT (5 phases, 4 shielded rune nodes — kill nodes first).
-      Beating it drops the Ascendant Core + permanent ARCHITECT SLAIN badge
-- [ ] Game over screen shows "This Run … % of best"
+### Quick fixes & monetization
+- [ ] Q1 Game-over restart on ENTER only — dash key must never restart a run
+      (death + dash currently skips the report screen)
+- [ ] Q2 Remove the "Pure HTML5 Canvas + Web Audio · no images, no libraries,
+      all code" footer from the title screen (KEEP the #verTag version span)
+- [ ] Q3 Title-screen ads: AdSense loader (client ca-pub-9117893594553497) + 4
+      rectangle ad units, one per rectangle; slots configurable at the top of
+      index.html; graceful styled placeholder when a slot is unset; hidden
+      during gameplay; zero console errors either way
 
-Mobile (or DevTools device emulation):
-- [ ] Camera is zoomed out — you can actually see approaching enemies
-- [ ] Joystick appears where the thumb lands; re-placing the thumb never
-      causes a random direction twitch
-- [ ] Dash via the » button or double-tap WHILE moving with the other finger —
-      movement never stops or stutters during dash
-- [ ] A short tap on a creature focuses it without interrupting movement
-- [ ] Tapping the pulsing sigil slot summons THE ARCHITECT (when forged)
+### Combat & progression
+- [ ] C1 ALL player weapon ranges −25% (attacks must not outrange bosses)
+- [ ] C2 Boss absolutes: remove build-based boss balancing entirely; 2× every
+      boss's HP; player damage TO bosses −25%
+- [ ] C3 Boss rotating lasers +110% damage
+- [ ] C4 PRISM and HIVE anti-orbit redesign — circling them must stop working
+      (punish constant-radius movement; force engagement)
+- [ ] C5 Five NEW weapons, all late-game unlocks (gated by run progress, not
+      in the early card pool)
+- [ ] C6 Five NEW abilities, late-game unlocks — split super-dash into two
+      (longer dash + shorter cooldown; damaging spore-trail dash) + invent
+      three more in that spirit
+- [ ] C7 Maxable extra-life ability: at max rank grants ONE extra life for the
+      rest of the run; if that life is consumed the ability resets to rank 0
+      and must be refilled
+- [ ] C8 Enemy drops (8s duration each): +move speed / longer dash / +30%
+      i-frame time on hit
 
-## After human confirmation ONLY
-merge refine/v2 → main, push to `neon` remote, bump VERSION to '2.0',
-update CHANGELOG.md, tag v2.0. (Deploys GitHub Pages live.)
+### Save, shop & skins
+- [ ] S1 Persistent save (localStorage): coins, owned/equipped skins, record,
+      meta unlocks survive closing the game
+- [ ] S2 Coins from boss kills (Architect and, later, Developer pay the most)
+- [ ] S3 Skin system research + design (how 2D games do skins well), then the
+      skin layer over the player render (palette/trail/shape/FX)
+- [ ] S4 Title-screen SHOP with 10 creative skins — cheapest ≈ 10 bosses of
+      coins, flagship ≈ 100 bosses
+### Bosses — elevate ALL to Architect standard
+- [ ] B1 SENTINEL TRINITY — three coordinated bodies, Architect-grade
+      animation + telegraphs; drops a unique relic/glyph
+- [ ] B2 LEVIATHAN — segmented serpent, Architect-grade; unique relic
+- [ ] B3 OBELISK — monolithic arena-control boss, Architect-grade; relic
+- [ ] B4 MIRROR — LEARNS from the player from spawn until the fight (weapons,
+      movement, habits), fights as an improved copy with its own abilities;
+      if the fight drags it adapts to counter the player's patterns, forcing
+      an aggressive escalating duel; relic
+- [ ] B5 NEXUS — portal/network boss, Architect-grade; relic
+- [ ] B6 Full relic set → summon THE ARCHITECT at will (extend the existing
+      glyph/sigil ritual to the grown roster)
+- [ ] B7 THE ARCHITECT absorbs EVERY roster boss's mechanics (fold in each
+      new boss as it lands) + finale-grade escalation so it reads as a finale
+
+### Postgame (after the Architect dies)
+- [ ] P1 Postgame state: LOWER enemy generation + genuinely new mechanics
+      (no big-horde spam)
+- [ ] P2 Special postgame bosses ≥ Architect tier, including fights that pull
+      the player into other dimensions
+- [ ] P3 THE DEVELOPER — final boss summoned with ≥10 manuscripts (dropped by
+      the Architect and postgame bosses): throws code, debuffs/effects,
+      teleports, dimension hops, multiple arms, summons mini-OVERLORDs,
+      massive, all previous bosses' abilities + brand-new ones, animations
+      unlike anything else
+- [ ] P4 Developer kills you → Easter eggs on title screen + run report:
+      English taunts ("Thought you could beat me?", "Forgot who codes this
+      game?"), glitch/bug effects, mock "/kill player", more
+- [ ] P5 Beat the Developer → special trophy power, then announced WAVE
+      survival mode (wave 1 small, scaling until you fall, wave number
+      announced at each start)
+
+### Animations
+- [ ] A1 Animation excellence pass: player, weapons, enemies, every boss to
+      the Architect bar and beyond (Terraria / Hollow Knight / Silksong
+      reference); enemy/boss attacks stay readable and distinct from player
+      effects

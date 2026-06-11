@@ -4,6 +4,35 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v2.0 — 2026-06-11 — The refinement pass (boss-rush core + THE ARCHITECT)
+
+Twelve subsystems shipped from branch `refine/v2`, closed by an adversarial
+review (9 fixes) and a Playwright smoke test.
+
+- Adaptive difficulty director: calm first ~40s, hidden power/stress signals
+  modulating spawns between bosses, ~25s re-ramp after a bomb, guaranteed
+  early card variety, under-performing weapon buffs.
+- Boss-rush core: shuffled boss bag (no fixed intro), elapsed-time + cycle
+  scaling, arena-sweeping entrance shockwave, director suppressed during
+  fights, boss XP worth ~5 level-ups (no more 20-level dumps).
+- Boss quality pass for OVERLORD / PRISM / HIVE / GLITCH / CONDUCTOR / WARDEN:
+  entrance animations, phase-transition cinematics, more telegraphed patterns.
+- THE ARCHITECT: every roster boss drops a glyph → forged sigil → portal
+  ritual summon → 5-phase screen-dominating super-boss with destructible rune
+  nodes; drops the Ascendant Core + permanent meta unlock (extra reroll,
+  damage head start, title-screen badge).
+- Enemy level scaling starts after the first boss cycle; "Lv N" badges.
+- Movement feel: snappier turns, dash momentum transfer, dash zoom + trail.
+- Mobile overhaul: zoomed-out camera wired through all world/screen math,
+  true multi-touch, dynamic joystick with dead zone, dash never stops you.
+- Focus target: click/tap a creature, auto-aim weapons prefer it, reticle.
+- Adaptive performance: device-tier budgets + rolling-FPS runtime adjustment.
+- Animations everywhere: player idle/thruster/dash/hurt/level-up, weapon
+  fire/impact, enemy spawn-in/death.
+- Bug sweep: weapon-card off-by-ones across ALL weapons, spawn-in contact
+  gate, phase-pause zone-timer desync, double-tap dash false positives, more.
+- QoL: first-run hint, directional damage indicator, results "% of best" row.
+
 ## v1.5 — 2026-06-09 — Boss system + buffs + six bosses
 
 A full, extensible boss system replaces the single inline OVERLORD.

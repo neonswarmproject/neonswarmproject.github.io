@@ -2,8 +2,8 @@
 
 The wrapper survives Claude usage-limit windows: when a limit hits, it parses
 the reset time, sleeps until then (timezone-aware), and resumes the SAME
-session with `claude --continue`. It stops by itself when the whole pass is
-done and the preview is waiting for you.
+session with `claude --continue`. It stops by itself when the checklist in
+`tools/refine-v2-progress.md` is fully shipped (`OVERNIGHT-DONE`).
 
 ## Launch (under tmux, so you can close the terminal)
 
@@ -33,10 +33,10 @@ Watch the log live from anywhere: `tail -f ~/.claude/neon-overnight/overnight.lo
 
 ## What "done" looks like
 
-The loop exits after printing `OVERNIGHT-DONE`, and
-`tools/refine-v2-progress.md` shows `STATUS: AWAITING-HUMAN`. A local preview
-server will be up — open the printed URL, playtest, then tell Claude to merge
-and deploy (it will NOT touch main until you do).
+The loop exits after printing `OVERNIGHT-DONE` once every checklist item in
+`tools/refine-v2-progress.md` is implemented, versioned, committed and pushed.
+Since 2026-06-11 each finished item ships straight to `main` (standing user
+authorization), so the live site updates as the night progresses.
 
 ## Notes
 
@@ -50,15 +50,16 @@ and deploy (it will NOT touch main until you do).
   ```
 
   It prints every rule it merges into `.claude/settings.local.json`: a scoped
-  allowlist (commit/serve/test commands, plus exactly `git push neon refine/v2`
-  for backups) and DENY rules that hard-block pushes to `origin`, to `main`,
-  and any `--force`. For reference, `permissions.allow` gets:
+  allowlist (commit/serve/test commands, plus `git push neon main` /
+  `git push neon refine/v2` / tag pushes) and DENY rules that hard-block any
+  push to `origin` and any `--force`. For reference, `permissions.allow` gets:
   ```json
   "Bash(git status*)", "Bash(git add *)", "Bash(git commit *)",
   "Bash(git checkout *)", "Bash(git switch *)", "Bash(git branch*)",
   "Bash(git log*)", "Bash(git diff*)", "Bash(git show*)",
   "Bash(git tag*)", "Bash(git restore *)", "Bash(git stash*)",
-  "Bash(git push neon refine/v2)",
+  "Bash(git push neon main)", "Bash(git push neon refine/v2)",
+  "Bash(git push neon v*)",
   "Bash(node *)", "Bash(bash -n *)",
   "Bash(python3 -m http.server*)", "Bash(npx playwright *)",
   "Bash(curl http://localhost*)", "Bash(curl -s http://localhost*)",
@@ -67,16 +68,17 @@ and deploy (it will NOT touch main until you do).
   ```
   and to `permissions.deny`:
   ```json
-  "Bash(git push origin*)", "Bash(git push * main*)", "Bash(git push *:main*)",
+  "Bash(git push origin*)",
   "Bash(git push --force*)", "Bash(git push -f *)", "Bash(git push * --force*)",
   "Bash(git push * -f *)"
   ```
   Escape hatch (your explicit call, never the default):
   `CLAUDE_OVERNIGHT_DANGEROUS=1 ./tools/claude-overnight.sh` removes approval
   gates for the unattended turns entirely.
-* Pushes: after each finished item it backs up the work branch with
-  `git push neon refine/v2`. It can NOT touch `main` or `origin` (deny rules +
-  prompt instructions) — the live site only changes when YOU approve the merge.
+* Pushes: after each finished item it bumps VERSION, updates CHANGELOG, commits
+  on `main` and runs `git push neon main` — each push deploys the live site
+  (standing user authorization, 2026-06-11). Pushes to `origin` and any
+  `--force` stay hard-blocked.
 * The wrapper re-execs itself under `caffeinate -is` so the Mac won't sleep
   mid-run. A lid-closed laptop on battery still sleeps — leave it on AC power.
 * Stop it anytime with `Ctrl-C` inside tmux (a lock file prevents double-runs).
