@@ -44,9 +44,15 @@ let W = 0, H = 0, DPR = 1;
 const MOBILE_ZOOM_MIN_DIM = 820;   // screens with min(W,H) below this zoom out
 const MOBILE_ZOOM = 0.62;          // world scale on small touch screens
 let camZoom = 1;
+function isTouchDevice() {
+  return window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+}
+let LV_BADGE_FONT = '700 10px Segoe UI, sans-serif';
 function computeZoom() {
-  const touch = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
-  camZoom = (touch && Math.min(W, H) < MOBILE_ZOOM_MIN_DIM) ? MOBILE_ZOOM : 1;
+  camZoom = (isTouchDevice() && Math.min(W, H) < MOBILE_ZOOM_MIN_DIM) ? MOBILE_ZOOM : 1;
+  // the Lv badge is drawn inside the world transform: counter the zoom so it
+  // stays readable on exactly the small screens the zoom-out targets
+  LV_BADGE_FONT = '700 ' + Math.round(10 / camZoom) + 'px Segoe UI, sans-serif';
 }
 
 function resize() {
@@ -253,6 +259,7 @@ const G = {
   focusTarget: null,               // creature the player tapped/clicked (Section H)
   dmgDir: null,                    // {a,t} — directional damage indicator (Section L)
   glyphs: {},                      // boss id -> true once its Glyph Fragment is collected
+  glyphCount: 0,                   // cached Object.keys(glyphs).length for the HUD
   sigil: 0,                        // 0 none | 1 forged (all glyphs) | 2 consumed
   ritual: null,                    // {t} — ARCHITECT summoning countdown
   sigilUI: null,                   // screen-space hit area of the sigil slot
@@ -282,9 +289,9 @@ const META = loadMeta();
    ========================================================================= */
 const keys = new Set();
 const pointer = { down: false, type: 'mouse', sx: 0, sy: 0, x: 0, y: 0, t0: 0, moved: 0 };
-const IS_TOUCH = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+const IS_TOUCH = isTouchDevice();
 const JOY_MAX = 70;
-let lastTapTime = 0;
+const lastTapUp = { t: -1e9, x: 0, y: 0 };   // set on pointerup when the touch was a TAP
 
 /* ---- v2 MULTI-TOUCH (Section G): every finger tracked by pointerId.
    One finger drives a dynamic joystick (anchored where it lands, with a dead
@@ -296,6 +303,7 @@ const JOY_DEAD = 10;          // px dead zone (fixes "reapply finger -> random d
 const TAP_MAX_DIST = 18;      // px drift allowed for a tap (vs a drag)
 const TAP_MAX_TIME = 0.25;    // s held allowed for a tap
 const DOUBLE_TAP_T = 280;     // ms window for the double-tap dash
+const DOUBLE_TAP_R = 80;      // px — both taps must land near the same spot
 
 function key(e, down) {
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
@@ -346,7 +354,16 @@ function onPointerDown(e) {
   const r = canvas.getBoundingClientRect();
   const x = e.clientX - r.left, y = e.clientY - r.top;
 
-  if (G.state === 'title') { startGame(); return; }
+  if (G.state === 'title') {
+    startGame();
+    // the starting finger immediately becomes the joystick — holding it down
+    // and dragging moves the ship without a forced re-press
+    if (e.pointerType === 'touch') {
+      const rec = { x, y, sx: x, sy: y, t0: performance.now(), role: 'move' };
+      touches.set(e.pointerId, rec); joyId = e.pointerId;
+    }
+    return;
+  }
 
   // SIGIL slot tap/click (Section D) — consumes the press, never moves/dashes
   if (G.state === 'playing' && G.sigilUI &&
@@ -363,10 +380,12 @@ function onPointerDown(e) {
       touches.set(e.pointerId, { role: 'ui' });
       return;
     }
-    // double-tap (any finger) dashes, preserving the current move direction
+    // double-tap dash: this touch quickly follows a completed TAP near the same
+    // spot and doesn't land on a creature (that's a focus tap). Joystick
+    // re-grips and extra fingers never trigger it — a drag's release is no TAP.
     const now = performance.now();
-    if (G.state === 'playing' && now - lastTapTime < DOUBLE_TAP_T) tryDash();
-    lastTapTime = now;
+    if (G.state === 'playing' && now - lastTapUp.t < DOUBLE_TAP_T &&
+        dist(x, y, lastTapUp.x, lastTapUp.y) < DOUBLE_TAP_R && !enemyAtScreen(x, y)) tryDash();
     const rec = { x, y, sx: x, sy: y, t0: now, role: 'free' };
     touches.set(e.pointerId, rec);
     if (joyId === null) { joyId = e.pointerId; rec.role = 'move'; }   // joystick lands here
@@ -410,6 +429,7 @@ function onPointerUp(e) {
     if (rec.role !== 'ui' && G.state === 'playing' &&
         (performance.now() - rec.t0) / 1000 < TAP_MAX_TIME &&
         dist(rec.x, rec.y, rec.sx, rec.sy) < TAP_MAX_DIST) {
+      lastTapUp.t = performance.now(); lastTapUp.x = rec.sx; lastTapUp.y = rec.sy;
       tryFocusAt(rec.sx, rec.sy);
     }
     return;
@@ -461,25 +481,33 @@ function moveVector() {
    aiming weapons prefer the focus while it lives. Same creature toggles off,
    another switches. Empty space never clears (no accidental drops). ---- */
 const FOCUS_PICK_R = 34;       // screen px — generous pick radius
+const FOCUS_LEAD_R = 800;      // world px — focus must be this close to the querying
+                               // weapon/anchor to steal aim (≈ max projectile reach)
+function effZoom() { return (1 + G.dashZoom) * camZoom; }    // the ONE world<->screen scale
+// radius of the visible world circle — matches the off-screen spawn ring
+function viewRadius() { return Math.hypot(W / camZoom, H / camZoom) / 2; }
 function screenToWorld(sx, sy) {
-  const z = (1 + G.dashZoom) * camZoom;
+  const z = effZoom();
   return { x: G.cam.x + (sx - W / 2) / z, y: G.cam.y + (sy - H / 2) / z };
 }
-function tryFocusAt(sx, sy) {
+function enemyAtScreen(sx, sy) {
   const w = screenToWorld(sx, sy);
-  const z = (1 + G.dashZoom) * camZoom;
-  const pickR = FOCUS_PICK_R / z;
+  const pickR = FOCUS_PICK_R / effZoom();
   let best = null, bd = Infinity;
   for (const e of G.enemies) {
     if (e.dead) continue;
     const d = dist(w.x, w.y, e.x, e.y) - e.r;
     if (d < pickR && d < bd) { bd = d; best = e; }
   }
+  return best;
+}
+function tryFocusAt(sx, sy) {
+  const best = enemyAtScreen(sx, sy);
   if (!best) return;                                          // empty space: keep focus
   G.focusTarget = (G.focusTarget === best) ? null : best;     // toggle / switch
   if (G.focusTarget) {
     sfx('hover');
-    G.particles.push({ x: best.x, y: best.y, vx: 0, vy: 0, r: best.r, mr: best.r + 18, life: 0.3, max: 0.3, color: WH, kind: 'ring' });
+    spawnRing(best.x, best.y, best.r, best.r + 18, 0.3, WH);
   }
 }
 function focusAlive() {
@@ -537,7 +565,7 @@ function hurtPlayer(dmg, srcX, srcY) {
   G.hitstop = Math.max(G.hitstop, 0.06);
   sfx('hurt');
   G.combo = 0;
-  G.particles.push({ x: player.x, y: player.y, vx: 0, vy: 0, r: player.r, mr: player.r * 4, life: 0.35, max: 0.35, color: RD, kind: 'ring' });
+  spawnRing(player.x, player.y, player.r, player.r * 4, 0.35, RD);
   for (let i = 0; i < 18; i++)
     spawnParticle(player.x, player.y, rand(-180, 180), rand(-180, 180), rand(0.2, 0.5), rand(2, 4), RD, 'spark');
   if (player.hp <= 0) { player.hp = 0; gameOver(); }
@@ -555,9 +583,11 @@ function hurtPlayer(dmg, srcX, srcY) {
 const S = () => player.stats;
 
 function nearestEnemy(x, y, maxD) {
-  // focus target wins while alive and in range (Section H)
+  // focus target wins while alive and in range (Section H) — but never from
+  // beyond FOCUS_LEAD_R: a kited-away focus must not eat shots that can't reach
   const f = focusAlive();
-  if (f && dist2(x, y, f.x, f.y) <= (maxD || 1e9) ** 2) return f;
+  const fr = Math.min(maxD || FOCUS_LEAD_R, FOCUS_LEAD_R);
+  if (f && dist2(x, y, f.x, f.y) <= fr * fr) return f;
   let best = null, bd = (maxD || 1e9) ** 2;
   const arr = G.enemies;
   for (let i = 0; i < arr.length; i++) {
@@ -577,7 +607,9 @@ function nearestEnemies(x, y, n) {
   list.sort((a, b) => a[0] - b[0]);
   const out = [];
   const f = focusAlive();
-  if (f) out.push(f);                                  // focus leads the volley
+  // focus leads the volley — only when in reach of the query point (chain arcs
+  // anchor on the previous hit; a cross-map focus must not bend them away)
+  if (f && dist2(x, y, f.x, f.y) <= FOCUS_LEAD_R * FOCUS_LEAD_R) out.push(f);
   for (let i = 0; i < list.length && out.length < n; i++) {
     const e = list[i][1];
     if (e !== f) out.push(e);
@@ -1170,7 +1202,7 @@ const WEAPONS = {
       const strikes = 1 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 2 : 0) + (lv >= 8 ? 2 : 0);
       const dmg = (26 + (lv >= 3 ? 12 : 0) + (lv >= 6 ? 16 : 0)) * S().damageMul;
       const aoe = (70 + (lv >= 6 ? 40 : 0)) * S().areaMul;
-      const reach = Math.hypot(W / camZoom, H / camZoom) / 2;
+      const reach = viewRadius();
       const near = (Math.random() < 0.75) ? nearestEnemies(player.x, player.y, 10) : null;
       for (let s = 0; s < strikes; s++) {
         let tx, ty;
@@ -1471,7 +1503,8 @@ const ETYPES = {
   juggernaut: { hp: 220, speed: 50,  r: 30, dmg: 24, xp: 12, color: OR, shape: 'hex' },
   // ARCHITECT rune node (Section D): destructible orbiting part; stats come
   // from ARCH_NODE_* via spawn opts (fixed difficulty, no time scaling).
-  archnode:   { hp: 1000, speed: 0,  r: 20, dmg: 14, xp: 0,  color: PU, shape: 'penta' },
+  archnode:   { hp: 1000, speed: 0,  r: 20, dmg: 14, xp: 0,  color: PU, shape: 'penta',
+                noMercy: true, noLevel: true, noSeparation: true },   // fixed stats, orbit-locked
 };
 
 // Late-game difficulty curve. HP ramps hard past ~4 min (cubic term); speed is
@@ -1518,16 +1551,18 @@ function spawnEnemy(type, x, y, opts) {
     speed: base.speed * d.speed, dmg: base.dmg * d.dmg, xp: base.xp,
     flash: 0, dead: false, slow: 1, fireT: rand(0, 1.5),
     rot: rand(0, TAU), elite: false, boss: false, spawn: ENEMY_SPAWNIN_T,
+    noSep: !!base.noSeparation,
   };
   if (opts) Object.assign(e, opts);
   // Adaptive mercy: when the hidden director says the player is struggling,
-  // fresh normals arrive slightly weaker. Bosses are NEVER softened.
-  if (!e.boss && G.dirIntensity < 1) {
+  // fresh normals arrive slightly weaker. Bosses and fixed-stat parts
+  // (archnodes) are NEVER softened.
+  if (!e.boss && !base.noMercy && G.dirIntensity < 1) {
     const ease = 1 - DIR_STRENGTH_EASE * (1 - G.dirIntensity) / (1 - DIR_INTENSITY_MIN);
     e.hp *= ease; e.maxHp = e.hp; e.dmg *= ease;
   }
   // enemy levels (Section E): late-game normals arrive leveled-up
-  if (!e.boss && e.type !== 'archnode') {
+  if (!e.boss && !base.noLevel) {
     e.lv = currentEnemyLevel();
     if (e.lv > 1) {
       const k = e.lv - 1;
@@ -1546,7 +1581,7 @@ function spawnRingPosition() {
   const a = rand(0, TAU);
   // stressed players get a touch more breathing room (spawns land further out);
   // camZoom widens the visible area, so the off-screen ring widens with it
-  const d = Math.hypot(W / camZoom, H / camZoom) / 2 + rand(60, 200) + G.dirStress * DIR_STRESS_SPACE;
+  const d = viewRadius() + rand(60, 200) + G.dirStress * DIR_STRESS_SPACE;
   let x = player.x + Math.cos(a) * d;
   let y = player.y + Math.sin(a) * d;
   const lim = ARENA / 2 - 30;
@@ -1627,9 +1662,9 @@ function director(dt) {
   G.dirIntensity = lerp(G.dirIntensity, target, Math.min(1, DIR_SIGNAL_LERP * dt));
   G.dirStress = clamp(stress, 0, 1);
 
-  // Normal waves — skipped entirely while a suppress-spawns boss is alive (it
-  // controls the arena; it may still summon its own minions via spawnEnemy).
-  if (!(G.boss && G.boss.suppressSpawns)) {
+  // Normal waves — skipped entirely while a boss is alive (v2: every boss owns
+  // the arena; it may still summon its own minions via spawnEnemy).
+  if (!G.boss) {
     G.spawnTimer -= dt;
     const interval = clamp(DIR_INTERVAL_BASE - m * DIR_INTERVAL_SLOPE, DIR_INTERVAL_MIN, DIR_INTERVAL_BASE);
     if (G.spawnTimer <= 0) {
@@ -1679,6 +1714,8 @@ const BOSS_DMG_BASE       = 18;
 const BOSS_DMG_PER_MIN    = 0.10;
 const BOSS_DMG_PER_TIER   = 0.25;
 const BOSS_SPEED_PER_TIER = 0.08;
+const BOSS_SPEED_PER_MIN  = 0.05;  // restores the v1 time scaling speed had...
+const BOSS_SPEED_TIME_CAP = 1.6;   // ...capped so late bosses stay dodgeable
 const BOSS_XP_LEVELS      = 5;     // a roster boss pays out ~5 level-ups of XP
 const BOSS_GEM_COUNT      = 26;    // ...as a burst of this many gems
 const BOSS_BANNER_T       = 2.4;   // s the WARNING banner stays up
@@ -1706,7 +1743,7 @@ function bossSweepArena(x, y, color) {
   for (const o of G.enemies) {
     if (o.boss || o.dead) { keep.push(o); continue; }
     o.dead = true; swept++;
-    G.particles.push({ x: o.x, y: o.y, vx: 0, vy: 0, r: 4, mr: o.r * 3, life: 0.5, max: 0.5, color: o.color, kind: 'ring' });
+    spawnRing(o.x, o.y, 4, o.r * 3, 0.5, o.color);   // budget-capped: a 300-strong sweep must not blow the particle pool
     for (let i = 0; i < 6; i++) {
       const a = rand(0, TAU), s = rand(80, 380);
       spawnParticle(o.x, o.y, Math.cos(a) * s, Math.sin(a) * s, rand(0.3, 0.7), rand(2, 4), o.color, 'spark');
@@ -1718,7 +1755,7 @@ function bossSweepArena(x, y, color) {
   for (const o of keep) G.enemies.push(o);
   G.eProj.length = 0;
   for (let k = 0; k < 3; k++)
-    G.particles.push({ x, y, vx: 0, vy: 0, r: 40, mr: 900 + k * 350, life: 0.7 + k * 0.15, max: 0.7 + k * 0.15, color: k % 2 ? WH : color, kind: 'ring' });
+    spawnRing(x, y, 40, 900 + k * 350, 0.7 + k * 0.15, k % 2 ? WH : color);
   if (swept) {
     sfx('bigExplode');
     G.hitstop = Math.max(G.hitstop, BOSS_SWEEP_HITSTOP);
@@ -1741,17 +1778,17 @@ function spawnBoss(forcedId) {
   const e = spawnEnemy('tank', p.x, p.y, {
     boss: true, r: def.r, color: def.color, shape: 'boss',
     hp, maxHp: hp,
-    speed: def.speed * (1 + G.bossTier * BOSS_SPEED_PER_TIER),
+    speed: def.speed * Math.min(BOSS_SPEED_TIME_CAP, 1 + mins * BOSS_SPEED_PER_MIN) * (1 + G.bossTier * BOSS_SPEED_PER_TIER),
     dmg: BOSS_DMG_BASE * (1 + mins * BOSS_DMG_PER_MIN + G.bossTier * BOSS_DMG_PER_TIER),
     xp: 60 + G.bossNum * 20,
     name: def.name + (G.bossTier > 0 ? ' ' + romanize(G.bossTier + 1) : ''),
-    bdef: def, data: {}, phase: 0, suppressSpawns: true,   // v2: every boss owns the arena
+    bdef: def, data: {}, phase: 0,
     entrance: BOSS_ENTRANCE_T, phasePause: 0,
   });
   addTelegraph({ kind: 'zone', x: p.x, y: p.y, r: def.r * 2.2, dur: BOSS_ENTRANCE_T, color: def.color });
   G.boss = e;
   G.bossNum++;
-  G.bossBanner = { name: e.name, life: BOSS_BANNER_T, max: BOSS_BANNER_T };
+  G.bossBanner = { name: e.name, sub: 'THE SWARM SCATTERS — DUEL BEGINS', life: BOSS_BANNER_T, max: BOSS_BANNER_T };
   sfx('boss');
   G.flash = 0.5; G.flashColor = def.color;
   G.shake = 1;
@@ -1775,13 +1812,33 @@ function spawnArchitect() {
     boss: true, r: ARCH_R, color: PU, shape: 'boss',
     hp: ARCH_HP, maxHp: ARCH_HP, speed: ARCH_SPEED, dmg: ARCH_DMG,
     xp: 400, name: def.name, bdef: def, data: {}, phase: 0,
-    suppressSpawns: true, entrance: ARCH_ENTRANCE, phasePause: 0,
+    entrance: ARCH_ENTRANCE, phasePause: 0,
   });
   G.boss = e;
-  G.bossBanner = { name: 'THE ARCHITECT', life: 3.2, max: 3.2 };
+  G.bossBanner = { name: 'THE ARCHITECT', sub: 'THE SWARM SCATTERS — DUEL BEGINS', life: 3.2, max: 3.2 };
   G.flash = 0.6; G.flashColor = PU; G.shake = 1;
   sfx('boss');
   if (Sound) { Sound.setIntensity(1); Sound.setMusicTempo(132); }
+}
+
+// Delayed-detonation zones (GLITCH corrupted sectors, ARCHITECT rewrites).
+// Ticked from the boss brain AND from the phase-pause breather — a zone's
+// telegraph is already on screen, so its countdown must never freeze while
+// the boss poses (the warning would vanish before the blast).
+function tickZoneList(list, dt, r, e) {
+  if (!list) return;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const z = list[i]; z.t -= dt;
+    if (z.t <= 0) {
+      explodeAt(z.x, z.y, r, YE);
+      if (dist(z.x, z.y, player.x, player.y) < r + player.r) hurtPlayer(e.dmg * B_BULLET);
+      list.splice(i, 1);
+    }
+  }
+}
+function tickBossZones(e, dt) {
+  tickZoneList(e.data.corZones, dt, GLITCH_CORRUPT_R, e);
+  tickZoneList(e.data.sectors, dt, ARCH_SECTOR_R, e);
 }
 
 // Called from EBEHAVIOR.boss (movement is still handled by updateEnemies unless a
@@ -1798,7 +1855,7 @@ function updateBoss(e, dt) {
     e.phasePause = Math.max(e.phasePause || 0, BOSS_PHASE_PAUSE);
     G.hitstop = Math.max(G.hitstop, BOSS_PHASE_HITSTOP);
     for (let k = 0; k < 3; k++)
-      G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: e.r * (3 + k * 2), life: 0.5 + k * 0.12, max: 0.5 + k * 0.12, color: k % 2 ? WH : e.color, kind: 'ring' });
+      spawnRing(e.x, e.y, e.r, e.r * (3 + k * 2), 0.5 + k * 0.12, k % 2 ? WH : e.color);
     for (let k = 0; k < 26; k++) { const a = k / 26 * TAU; spawnParticle(e.x, e.y, Math.cos(a) * rand(150, 420), Math.sin(a) * rand(150, 420), rand(0.4, 0.8), rand(2, 5), e.color, 'spark'); }
     floater(e.x, e.y - e.r - 26, 'PHASE ' + (e.phase + 1), e.color, 22);
     G.flash = Math.max(G.flash, 0.3); G.flashColor = e.color;
@@ -2021,7 +2078,8 @@ const BOSSES = {
       if (d.droneCD <= 0) {
         d.droneCD = p2 ? HIVE_DRONE_CD * 0.6 : HIVE_DRONE_CD;
         const n = randi(3, 5);
-        for (let k = 0; k < n; k++) { if (countType('mini') >= HIVE_DRONE_CAP) break; const a = k / n * TAU + e.rot; spawnEnemy('mini', e.x + Math.cos(a) * e.r, e.y + Math.sin(a) * e.r, { vx: Math.cos(a) * 90, vy: Math.sin(a) * 90 }); }
+        let minis = countType('mini');       // count once, not per spawned drone
+        for (let k = 0; k < n && minis < HIVE_DRONE_CAP; k++, minis++) { const a = k / n * TAU + e.rot; spawnEnemy('mini', e.x + Math.cos(a) * e.r, e.y + Math.sin(a) * e.r, { vx: Math.cos(a) * 90, vy: Math.sin(a) * 90 }); }
       }
       d.wallCD = (d.wallCD ?? HIVE_WALL_CD) - dt;
       if (d.wallCD <= 0) {
@@ -2107,14 +2165,7 @@ const BOSSES = {
           }
         }
       }
-      if (d.corZones) for (let i = d.corZones.length - 1; i >= 0; i--) {
-        const z = d.corZones[i]; z.t -= dt;
-        if (z.t <= 0) {
-          explodeAt(z.x, z.y, GLITCH_CORRUPT_R, YE);
-          if (dist(z.x, z.y, player.x, player.y) < GLITCH_CORRUPT_R + player.r) hurtPlayer(e.dmg * B_BULLET);
-          d.corZones.splice(i, 1);
-        }
-      }
+      tickZoneList(d.corZones, dt, GLITCH_CORRUPT_R, e);
       // phase 2 — glitch hiccup (mostly visual; brief, telegraphed, rare)
       if (p2) { d.hicCD = (d.hicCD ?? GLITCH_HIC_CD) - dt; if (d.hicCD <= 0) { d.hicCD = GLITCH_HIC_CD; G.glitchFX = 1; G.inputHiccup = 0.3; } }
     },
@@ -2346,14 +2397,7 @@ const BOSSES = {
           }
         }
       }
-      if (d.sectors) for (let i = d.sectors.length - 1; i >= 0; i--) {
-        const z = d.sectors[i]; z.t -= dt;
-        if (z.t <= 0) {
-          explodeAt(z.x, z.y, ARCH_SECTOR_R, YE);
-          if (dist(z.x, z.y, player.x, player.y) < ARCH_SECTOR_R + player.r) hurtPlayer(e.dmg * B_BULLET);
-          d.sectors.splice(i, 1);
-        }
-      }
+      tickZoneList(d.sectors, dt, ARCH_SECTOR_R, e);
       // CONDUCT (phase 4+): gravity grip + gap rings + twin spiral arms
       // (WARDEN/CONDUCTOR evolved)
       if (e.phase >= 3) {
@@ -2530,12 +2574,16 @@ const EBEHAVIOR = {
         if (e.entrance <= 0) {               // arrival slam
           G.shake = Math.min(1, G.shake + 0.5);
           G.flash = Math.max(G.flash, 0.35); G.flashColor = e.color;
-          G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: e.r * 5, life: 0.5, max: 0.5, color: e.color, kind: 'ring' });
+          spawnRing(e.x, e.y, e.r, e.r * 5, 0.5, e.color);
           sfx('boss');
         }
         return;
       }
-      if (e.phasePause > 0) { e.phasePause -= dt; c.sp = 0; return; }   // phase-transition breather
+      if (e.phasePause > 0) {                // phase-transition breather
+        e.phasePause -= dt; c.sp = 0;
+        tickBossZones(e, dt);                // telegraphed zones keep counting down
+        return;
+      }
       c.sp = (e.bdef && e.bdef.selfMove) ? 0 : e.speed;   // slow chase unless the def drives itself
       updateBoss(e, dt);
     },
@@ -2781,8 +2829,8 @@ function updateEnemies(dt) {
     e.vx = lerp(e.vx, c.ax * c.sp, 0.12);
     e.vy = lerp(e.vy, c.ay * c.sp, 0.12);
 
-    // light separation so they don't fully stack (rune nodes are orbit-locked)
-    if (!e.boss && e.type !== 'archnode') {
+    // light separation so they don't fully stack (noSep types are orbit-locked)
+    if (!e.boss && !e.noSep) {
       grid.query(e.x, e.y, e.r + 18, _q);
       let px = 0, py = 0, cnt = 0;
       for (let j = 0; j < _q.length; j++) {
@@ -2802,8 +2850,9 @@ function updateEnemies(dt) {
     const lim = ARENA / 2 - e.r;
     e.x = clamp(e.x, -lim, lim); e.y = clamp(e.y, -lim, lim);
 
-    // contact with player
-    if (c.d < e.r + player.r) {
+    // contact with player — never while still materializing (spawn-in fade /
+    // boss entrance): the body renders tiny and faint, so the hit would feel invisible
+    if (c.d < e.r + player.r && !(e.spawn > 0) && !(e.boss && e.entrance > 0)) {
       if (beh && beh.contact) beh.contact(e, c);
       else { hurtPlayer(e.dmg, e.x, e.y); e.vx -= c.ax * 60; e.vy -= c.ay * 60; } // default knockback
     }
@@ -2857,12 +2906,18 @@ function spawnParticle(x, y, vx, vy, life, r, color, kind) {
   if (G.particles.length >= PERF.particleBudget) G.particles.shift();
   G.particles.push({ x, y, vx, vy, life, max: life, r, color, kind: kind || 'spark', drag: 0.92 });
 }
+// Expanding ring shockwave — same budget enforcement as spawnParticle (rings
+// pushed straight into G.particles would be exempt from PERF.particleBudget).
+function spawnRing(x, y, r, mr, life, color) {
+  if (G.particles.length >= PERF.particleBudget) G.particles.shift();
+  G.particles.push({ x, y, vx: 0, vy: 0, r, mr, life, max: life, color, kind: 'ring' });
+}
 function floater(x, y, text, color, size) {
   if (G.floaters.length >= 90) G.floaters.shift();
   G.floaters.push({ x, y, vy: -42, life: 0.8, max: 0.8, text, color, size: size || 14 });
 }
 function explodeAt(x, y, radius, color) {
-  G.particles.push({ x, y, vx: 0, vy: 0, r: 8, mr: radius, life: 0.4, max: 0.4, color, kind: 'ring' });
+  spawnRing(x, y, 8, radius, 0.4, color);
   for (let i = 0, n = Math.max(6, Math.round(16 * PERF.fxLevel)); i < n; i++) {
     const a = rand(0, TAU), s = rand(60, 320);
     spawnParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(0.25, 0.55), rand(2, 5), color, 'spark');
@@ -2997,16 +3052,24 @@ function spawnPickup(x, y, type, opts) {
   G.pickups.push(p);
 }
 
+// magnetize every gem currently on screen (magnet/singularity pickups; the
+// nectar buff does the same continuously inside updateGems' main loop)
+function magnetizeVisibleGems() {
+  const os = viewRadius();
+  for (const g of G.gems) if (dist(g.x, g.y, player.x, player.y) <= os) g.mag = true;
+}
 function updateGems(dt) {
   const arr = G.gems;
   const pr = S().pickup;
-  // Queen's Nectar: continuously magnetize every on-screen gem while active.
-  if (player.buffT.nectar > 0) { const os = Math.hypot(W / camZoom, H / camZoom) / 2; for (const g of arr) if (dist(g.x, g.y, player.x, player.y) <= os) g.mag = true; }
+  // Queen's Nectar: continuously magnetize every on-screen gem while active
+  // (folded into the main loop — it already computes each gem's distance).
+  const nectarR = player.buffT.nectar > 0 ? viewRadius() : 0;
   for (let i = arr.length - 1; i >= 0; i--) {
     const g = arr[i];
     g.t += dt;
     g.vx *= 0.9; g.vy *= 0.9;
     const d = dist(g.x, g.y, player.x, player.y);
+    if (nectarR && d <= nectarR) g.mag = true;
     if (g.mag || d < pr) {
       const a = angTo(g.x, g.y, player.x, player.y);
       const pull = g.mag ? 720 : lerp(180, 620, 1 - d / pr);
@@ -3053,11 +3116,7 @@ function applyPickup(type, p) {
     floater(player.x, player.y - 24, '+HP', GR, 18); sfx('coin');
     for (let i = 0; i < 16; i++) spawnParticle(player.x, player.y, rand(-120, 120), rand(-120, 120), 0.5, 3, GR, 'spark');
   } else if (type === 'magnet') {
-    // Only magnetize gems that are currently on-screen. The world renders at
-    // camZoom centered on the camera, so hypot(W,H)/2 ÷ camZoom is the visible
-    // edge (and matches the off-screen spawn ring). Off-screen gems are left alone.
-    const onScreen = Math.hypot(W / camZoom, H / camZoom) / 2;
-    for (const g of G.gems) if (dist(g.x, g.y, player.x, player.y) <= onScreen) g.mag = true;
+    magnetizeVisibleGems();                  // on-screen gems only; off-screen are left alone
     floater(player.x, player.y - 24, 'MAGNET', BL, 18); sfx('coin');
   } else if (type === 'bomb') {
     sfx('bigExplode'); G.shake = 1; G.flash = 0.6; G.flashColor = OR; G.hitstop = 0.08;
@@ -3085,13 +3144,14 @@ function applyPickup(type, p) {
     floater(player.x, player.y - 24, 'TEMPO+', CY, 18); sfx('coin');
     for (let i = 0; i < 12; i++) spawnParticle(player.x, player.y, rand(-110, 110), rand(-110, 110), 0.45, 3, CY, 'spark');
   } else if (type === 'singularity') {      // Singularity Fragment — magnetize all + damage aura
-    const os = Math.hypot(W / camZoom, H / camZoom) / 2; for (const g of G.gems) if (dist(g.x, g.y, player.x, player.y) <= os) g.mag = true;
+    magnetizeVisibleGems();
     player.buffT.aura = BUFF_AURA_T; player.buffT.auraTick = 0;
     floater(player.x, player.y - 24, 'SINGULARITY', PU, 18); sfx('coin');
     for (let i = 0; i < 16; i++) spawnParticle(player.x, player.y, rand(-130, 130), rand(-130, 130), 0.6, 3, PU, 'spark');
   } else if (type === 'glyph') {            // ARCHITECT Glyph Fragment (Section D)
     if (p && p.glyphId) G.glyphs[p.glyphId] = true;
     const n = Object.keys(G.glyphs).length;
+    G.glyphCount = n;                        // cached for the per-frame HUD draw
     floater(player.x, player.y - 24, 'GLYPH ' + n + '/' + BOSS_IDS.length, YE, 18); sfx('coin');
     for (let i = 0; i < 14; i++) spawnParticle(player.x, player.y, rand(-120, 120), rand(-120, 120), 0.5, 3, YE, 'spark');
     if (n >= BOSS_IDS.length && G.sigil === 0) {
@@ -3315,13 +3375,14 @@ function update(dt) {
   const lim = ARENA / 2 - player.r;
   player.x = clamp(player.x, -lim, lim); player.y = clamp(player.y, -lim, lim);
   G.playerSlow = 1;                             // reset; disruptors re-apply during updateEnemies
+  const spd = Math.hypot(player.vx, player.vy);
 
   // aim toward movement or nearest enemy
-  if (Math.hypot(player.vx, player.vy) > 30) player.aim = Math.atan2(player.vy, player.vx);
+  if (spd > 30) player.aim = Math.atan2(player.vy, player.vx);
   else { const t = nearestEnemy(player.x, player.y); if (t) player.aim = angTo(player.x, player.y, t.x, t.y); }
 
   // thruster particles (budget-aware)
-  if (Math.hypot(player.vx, player.vy) > 40 && Math.random() < 0.7 * PERF.fxLevel) {
+  if (spd > 40 && Math.random() < 0.7 * PERF.fxLevel) {
     const a = Math.atan2(player.vy, player.vx) + Math.PI;
     spawnParticle(player.x + Math.cos(a) * 10, player.y + Math.sin(a) * 10, Math.cos(a) * rand(30, 90) + rand(-20, 20), Math.sin(a) * rand(30, 90) + rand(-20, 20), rand(0.2, 0.4), rand(1.5, 3), CY, 'spark');
   }
@@ -3408,7 +3469,7 @@ function worldTransform() {
   if (G.shake > 0) { const t = G.shake * G.shake * 16; sx = rand(-t, t); sy = rand(-t, t); }
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.translate(W / 2, H / 2);
-  const z = (1 + G.dashZoom) * camZoom;   // dash punch-in × mobile zoom-out
+  const z = effZoom();                    // dash punch-in × mobile zoom-out
   ctx.scale(z, z);
   ctx.translate(-G.cam.x + sx, -G.cam.y + sy);
 }
@@ -3653,7 +3714,7 @@ function render() {
     }
     // level badge (Section E): only when meaningfully leveled
     if (e.lv > 1) {
-      ctx.font = '700 10px Segoe UI, sans-serif';
+      ctx.font = LV_BADGE_FONT;            // counter-scaled so it's readable under camZoom
       ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
       ctx.fillStyle = rgba(YE, 0.85);
       ctx.fillText('Lv ' + e.lv, e.x, e.y - e.r - 12);
@@ -3833,9 +3894,11 @@ function drawHUD() {
     ctx.font = '900 34px Segoe UI, sans-serif';
     ctx.fillStyle = rgba(RD, (0.7 + 0.3 * Math.sin(G.time * 12)) * a * slide);
     ctx.fillText('⚠ ' + bb.name + ' ⚠', W / 2, H * 0.30 - 8);
-    ctx.font = '700 13px Segoe UI, sans-serif';
-    ctx.fillStyle = rgba(WH, 0.85 * a * slide);
-    ctx.fillText('THE SWARM SCATTERS — DUEL BEGINS', W / 2, H * 0.30 + 22);
+    if (bb.sub) {   // only duel banners carry the subtitle (not SIGIL/ritual events)
+      ctx.font = '700 13px Segoe UI, sans-serif';
+      ctx.fillStyle = rgba(WH, 0.85 * a * slide);
+      ctx.fillText(bb.sub, W / 2, H * 0.30 + 22);
+    }
     ctx.textBaseline = 'alphabetic';
   }
 
@@ -3880,10 +3943,11 @@ function drawHUD() {
 
   // SIGIL inventory slot (Section D) — appears once the first glyph drops
   {
-    const glyphN = Object.keys(G.glyphs).length;
+    const glyphN = G.glyphCount;
     if (glyphN > 0 && G.sigil < 2) {
       const sx = W - 56, sy = H - (IS_TOUCH ? 148 : 72);
-      G.sigilUI = { x: sx, y: sy, r: 26 };
+      if (G.sigilUI) { G.sigilUI.x = sx; G.sigilUI.y = sy; }
+      else G.sigilUI = { x: sx, y: sy, r: 26 };
       const forged = G.sigil === 1;
       const pulse = forged ? 0.75 + 0.25 * Math.sin(G.time * 5) : 0.45;
       ctx.fillStyle = rgba(PU, forged ? 0.30 : 0.10);
@@ -3970,7 +4034,7 @@ function startGame() {
     kills: 0, score: 0, combo: 0, comboTimer: 0,
     pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: FIRST_BOSS_AT, bossNum: 0, bossBag: [], bossBanner: null, bossTier: 0,
     dirIntensity: 1, dirStress: 0, dirKps: 0, dirDps: 0, spawnRamp: 1,
-    glyphs: {}, sigil: 0, ritual: null, sigilUI: null, lvUnlockAt: null,
+    glyphs: {}, glyphCount: 0, sigil: 0, ritual: null, sigilUI: null, lvUnlockAt: null,
     dashZoom: 0, trail: [], focusTarget: null, dmgDir: null,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });
