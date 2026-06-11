@@ -25,8 +25,8 @@
 'use strict';
 
 // Single source of truth for the build version (shown discreetly on the title
-// screen). Bump the minor by 0.1 for each completed prompt.
-const VERSION = '1.5';
+// screen).
+const VERSION = '2.0';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -36,6 +36,25 @@ const ctx = canvas.getContext('2d');
 const boot = document.getElementById('boot');
 
 let W = 0, H = 0, DPR = 1;
+
+// v2 mobile view (Section G): zoom OUT on small touch screens so the player
+// sees a comparable slice of the arena to desktop. camZoom scales the world
+// transform; every world<->screen calculation divides by it (spawn ring,
+// magnet radius, grid extents, pointer picking).
+const MOBILE_ZOOM_MIN_DIM = 820;   // screens with min(W,H) below this zoom out
+const MOBILE_ZOOM = 0.62;          // world scale on small touch screens
+let camZoom = 1;
+function isTouchDevice() {
+  return window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+}
+let LV_BADGE_FONT = '700 10px Segoe UI, sans-serif';
+function computeZoom() {
+  camZoom = (isTouchDevice() && Math.min(W, H) < MOBILE_ZOOM_MIN_DIM) ? MOBILE_ZOOM : 1;
+  // the Lv badge is drawn inside the world transform: counter the zoom so it
+  // stays readable on exactly the small screens the zoom-out targets
+  LV_BADGE_FONT = '700 ' + Math.round(10 / camZoom) + 'px Segoe UI, sans-serif';
+}
+
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   W = window.innerWidth;
@@ -45,6 +64,7 @@ function resize() {
   canvas.style.width  = W + 'px';
   canvas.style.height = H + 'px';
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  computeZoom();
 }
 window.addEventListener('resize', resize);
 resize();
@@ -69,6 +89,19 @@ function rgba(h, a) { const c = hexToRgb(h); return `rgba(${c[0]},${c[1]},${c[2]
 
 const ARENA = 4200;          // arena spans -ARENA/2 .. ARENA/2 on each axis
 const BASE_SPEED = 232;
+
+// v2 boss-rush cadence (declared early: the G literal reads these at boot)
+const FIRST_BOSS_AT    = 45;   // s — the opening 1v1 duel is the hook
+const BOSS_FARM_WINDOW = 75;   // s of adaptive farming between boss kills
+
+// v2 movement feel (Section F)
+const MOVE_LERP = 0.2;         // baseline velocity smoothing
+const TURN_ASSIST = 3.2;       // extra steering response when reversing at speed
+const DASH_TIME = 0.16, DASH_CD = 1.5, DASH_SPEED_MUL = 4.2, DASH_IFRAME = 0.28;
+const DASH_VEL_CARRY = 0.45;   // dash momentum kept when the dash ends
+const DASH_ZOOM = 0.06;        // camera punch-in while dashing
+const DASH_TRAIL_LIFE = 0.22;  // s each afterimage ghost lives
+const CAM_LERP = 0.12;         // smooth camera follow (never snaps)
 
 /* ===========================================================================
    2. GLOW SPRITE CACHE & DRAW HELPERS
@@ -151,13 +184,56 @@ const _wq = [], _wq2 = []; // dedicated buffers for the new weapons (never clobb
    4. GAME STATE
    ========================================================================= */
 const MAX_ENEMIES = 380;
-const MAX_PARTICLES = 1400;
 const MAX_EPROJ = 1200;      // enemy-bullet cap; drop oldest so bullet-hell phases stay smooth on mobile
+
+/* ---- v2 ADAPTIVE PERFORMANCE (Section I): the fixed particle cap is gone.
+   Startup classifies the device into a tier (cores + memory + DPR/screen) for
+   an initial particle/effect budget; at runtime a rolling FPS sample nudges
+   the budget up or down to hold ~60fps (graceful at 30 on weak devices).
+   Telegraphs and enemy bullets are gameplay signal — they are NEVER culled. */
+const PERF_TIER_BUDGET = [500, 900, 1400, 2200];  // particle budget per tier 0..3
+const PERF_FPS_TARGET = 55;       // comfortable: budget may recover
+const PERF_FPS_LOW = 45;          // struggling: budget gets cut
+const PERF_SAMPLE_T = 1.0;        // s per FPS sample window
+const PERF_STEP = 0.85;           // cut multiplier
+const PERF_RECOVER = 1.06;        // recovery multiplier
+const PERF_MIN_PARTICLES = 220;
+const PERF = { tier: 2, particleBudget: 1400, budgetMax: 1400, fxLevel: 1, frames: 0, accum: 0 };
+function initPerf() {
+  const cores = navigator.hardwareConcurrency || 4;
+  const mem = navigator.deviceMemory || 4;
+  const dpr = window.devicePixelRatio || 1;
+  const small = Math.min(screen.width, screen.height) < 800;
+  let score = 0;
+  score += cores >= 8 ? 2 : cores >= 4 ? 1 : 0;
+  score += mem >= 8 ? 2 : mem >= 4 ? 1 : 0;
+  if (dpr > 2 && small) score -= 1;     // tiny high-DPI screens pay a fill-rate tax
+  PERF.tier = clamp(small ? Math.min(score, 2) : score, 0, 3);
+  PERF.budgetMax = PERF_TIER_BUDGET[PERF.tier];
+  PERF.particleBudget = PERF.budgetMax;
+  PERF.fxLevel = PERF.tier >= 2 ? 1 : PERF.tier === 1 ? 0.7 : 0.45;
+}
+initPerf();
+function perfSample(dt) {
+  PERF.frames++; PERF.accum += dt;
+  if (PERF.accum < PERF_SAMPLE_T) return;
+  const fps = PERF.frames / PERF.accum;
+  PERF.frames = 0; PERF.accum = 0;
+  if (fps < PERF_FPS_LOW) {
+    PERF.particleBudget = Math.max(PERF_MIN_PARTICLES, Math.floor(PERF.particleBudget * PERF_STEP));
+    PERF.fxLevel = Math.max(0.3, PERF.fxLevel * 0.92);
+  } else if (fps > PERF_FPS_TARGET && PERF.particleBudget < PERF.budgetMax) {
+    PERF.particleBudget = Math.min(PERF.budgetMax, Math.ceil(PERF.particleBudget * PERF_RECOVER));
+    PERF.fxLevel = Math.min(PERF.tier >= 2 ? 1 : 0.8, PERF.fxLevel * 1.03);
+  }
+}
 
 const G = {
   state: 'title',                 // title | playing | levelup | paused | gameover
   time: 0,                        // seconds survived
   cam: { x: 0, y: 0 },
+  dashZoom: 0,                    // momentary camera punch-in while dashing
+  trail: [],                      // dash afterimage ghosts
   shake: 0,                       // trauma 0..1
   hitstop: 0,                     // seconds of frozen time
   flash: 0,                       // white/red screen flash 0..1
@@ -169,10 +245,24 @@ const G = {
   pendingLevels: 0,
   rerolls: 1,
   spawnTimer: 0,
-  nextBossAt: 75,
+  dirIntensity: 1,                 // hidden adaptive pressure 0.55..1.65 (never shown)
+  dirStress: 0,                    // hidden player-stress 0..1 (never shown)
+  dirKps: 0,                       // decaying kill counter -> clear-rate signal
+  dirDps: 0,                       // decaying damage-taken counter -> stress signal
+  spawnRamp: 1,                    // 0 after a bomb, climbs back over BOMB_RAMP_TIME
+  nextBossAt: FIRST_BOSS_AT,
   bossNum: 0,                      // running total of bosses spawned
-  bossIndex: 0,                    // position in BOSS_ORDER (0 = intro overlord)
-  bossTier: 0,                     // New Game+ tier; bosses return stronger when the order wraps
+  bossBag: [],                     // shuffled bag of upcoming bosses (refilled per cycle)
+  bossBanner: null,                // {name, life, max} — WARNING banner on boss arrival
+  bossTier: 0,                     // completed bag cycles; bosses return stronger
+  lvUnlockAt: null,                // time when enemy leveling unlocked (Section E)
+  focusTarget: null,               // creature the player tapped/clicked (Section H)
+  dmgDir: null,                    // {a,t} — directional damage indicator (Section L)
+  glyphs: {},                      // boss id -> true once its Glyph Fragment is collected
+  glyphCount: 0,                   // cached Object.keys(glyphs).length for the HUD
+  sigil: 0,                        // 0 none | 1 forged (all glyphs) | 2 consumed
+  ritual: null,                    // {t} — ARCHITECT summoning countdown
+  sigilUI: null,                   // screen-space hit area of the sigil slot
   inputHiccup: 0,                  // brief (<=0.5s) movement-input loss from GLITCH boss
   glitchFX: 0,                     // screen-space glitch overlay intensity 0..1
   boss: null,
@@ -189,15 +279,31 @@ function loadBest() {
   catch (e) { return { score: 0, time: 0, kills: 0, level: 1 }; }
 }
 function saveBest(b) { try { localStorage.setItem('neonswarm.best', JSON.stringify(b)); } catch (e) {} }
+// permanent meta-progression (Section D: THE ARCHITECT unlock lives here)
+function loadMeta() { try { return JSON.parse(localStorage.getItem('neonswarm.meta')) || {}; } catch (e) { return {}; } }
+function saveMeta(m) { try { localStorage.setItem('neonswarm.meta', JSON.stringify(m)); } catch (e) {} }
+const META = loadMeta();
 
 /* ===========================================================================
    5. INPUT
    ========================================================================= */
 const keys = new Set();
-const pointer = { down: false, type: 'mouse', sx: 0, sy: 0, x: 0, y: 0 };
-const IS_TOUCH = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+const pointer = { down: false, type: 'mouse', sx: 0, sy: 0, x: 0, y: 0, t0: 0, moved: 0 };
+const IS_TOUCH = isTouchDevice();
 const JOY_MAX = 70;
-let lastTapTime = 0;
+const lastTapUp = { t: -1e9, x: 0, y: 0 };   // set on pointerup when the touch was a TAP
+
+/* ---- v2 MULTI-TOUCH (Section G): every finger tracked by pointerId.
+   One finger drives a dynamic joystick (anchored where it lands, with a dead
+   zone), other fingers can dash / tap-focus / hit UI — and NOTHING ever
+   interrupts movement. The legacy `pointer` object now serves mouse/pen only. */
+const touches = new Map();    // pointerId -> {x,y,sx,sy,t0,role:'move'|'free'|'ui'}
+let joyId = null;             // pointerId currently driving the joystick
+const JOY_DEAD = 10;          // px dead zone (fixes "reapply finger -> random direction")
+const TAP_MAX_DIST = 18;      // px drift allowed for a tap (vs a drag)
+const TAP_MAX_TIME = 0.25;    // s held allowed for a tap
+const DOUBLE_TAP_T = 280;     // ms window for the double-tap dash
+const DOUBLE_TAP_R = 80;      // px — both taps must land near the same spot
 
 function key(e, down) {
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
@@ -231,6 +337,7 @@ function key(e, down) {
     if (G.state === 'playing' || G.state === 'paused') {
       if (k === 'Escape' || k === 'p') return togglePause();
     }
+    if (G.state === 'playing' && k === 'g') return activateSigil();   // ARCHITECT summon
     keys.add(k);
     if ((k === ' ' || k === 'Shift') && G.state === 'playing') tryDash();
   } else {
@@ -244,26 +351,98 @@ function onPointerDown(e) {
   // ignore clicks that land on HTML buttons / overlays
   if (e.target !== canvas) return;
   unlockAudio();
+  const r = canvas.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+
+  if (G.state === 'title') {
+    startGame();
+    // the starting finger immediately becomes the joystick — holding it down
+    // and dragging moves the ship without a forced re-press
+    if (e.pointerType === 'touch') {
+      const rec = { x, y, sx: x, sy: y, t0: performance.now(), role: 'move' };
+      touches.set(e.pointerId, rec); joyId = e.pointerId;
+    }
+    return;
+  }
+
+  // SIGIL slot tap/click (Section D) — consumes the press, never moves/dashes
+  if (G.state === 'playing' && G.sigilUI &&
+      dist(x, y, G.sigilUI.x, G.sigilUI.y) <= G.sigilUI.r + 8) {
+    activateSigil();
+    if (e.pointerType === 'touch') touches.set(e.pointerId, { role: 'ui' });
+    return;
+  }
+
+  if (e.pointerType === 'touch') {
+    // dash button: an independent touch — never touches the joystick state
+    if (G.state === 'playing' && dist(x, y, W - 56, H - 56) < 44) {
+      tryDash();
+      touches.set(e.pointerId, { role: 'ui' });
+      return;
+    }
+    // double-tap dash: this touch quickly follows a completed TAP near the same
+    // spot and doesn't land on a creature (that's a focus tap). Joystick
+    // re-grips and extra fingers never trigger it — a drag's release is no TAP.
+    const now = performance.now();
+    if (G.state === 'playing' && now - lastTapUp.t < DOUBLE_TAP_T &&
+        dist(x, y, lastTapUp.x, lastTapUp.y) < DOUBLE_TAP_R && !enemyAtScreen(x, y)) tryDash();
+    const rec = { x, y, sx: x, sy: y, t0: now, role: 'free' };
+    touches.set(e.pointerId, rec);
+    if (joyId === null) { joyId = e.pointerId; rec.role = 'move'; }   // joystick lands here
+    return;
+  }
+
+  // mouse / pen: hold-to-move toward the cursor (unchanged)
   pointer.down = true;
   pointer.type = e.pointerType || 'mouse';
-  const r = canvas.getBoundingClientRect();
-  pointer.sx = pointer.x = e.clientX - r.left;
-  pointer.sy = pointer.y = e.clientY - r.top;
-
-  if (G.state === 'playing' && pointer.type === 'touch') {
-    const now = performance.now();
-    if (now - lastTapTime < 280) tryDash();
-    lastTapTime = now;
-  }
-  if (G.state === 'title') startGame();
+  pointer.sx = pointer.x = x;
+  pointer.sy = pointer.y = y;
+  pointer.t0 = performance.now();
+  pointer.moved = 0;
 }
 function onPointerMove(e) {
-  if (!pointer.down) return;
   const r = canvas.getBoundingClientRect();
-  pointer.x = e.clientX - r.left;
-  pointer.y = e.clientY - r.top;
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  const rec = touches.get(e.pointerId);
+  if (rec) {
+    if (rec.role !== 'ui') { rec.x = x; rec.y = y; }
+    return;
+  }
+  if (pointer.down && e.pointerType !== 'touch') {
+    pointer.moved += Math.abs(x - pointer.x) + Math.abs(y - pointer.y);
+    pointer.x = x; pointer.y = y;
+  }
 }
-function onPointerUp() { pointer.down = false; }
+function onPointerUp(e) {
+  const rec = touches.get(e.pointerId);
+  if (rec) {
+    touches.delete(e.pointerId);
+    if (e.pointerId === joyId) {
+      joyId = null;
+      // promote a remaining free finger to the joystick (anchor at its spot,
+      // so the hand-off causes no movement jump)
+      for (const [id, t] of touches) {
+        if (t.role === 'free') { joyId = id; t.role = 'move'; t.sx = t.x; t.sy = t.y; break; }
+      }
+    }
+    // a short, stationary touch is a TAP -> focus attempt (Section H)
+    if (rec.role !== 'ui' && G.state === 'playing' &&
+        (performance.now() - rec.t0) / 1000 < TAP_MAX_TIME &&
+        dist(rec.x, rec.y, rec.sx, rec.sy) < TAP_MAX_DIST) {
+      lastTapUp.t = performance.now(); lastTapUp.x = rec.sx; lastTapUp.y = rec.sy;
+      tryFocusAt(rec.sx, rec.sy);
+    }
+    return;
+  }
+  if (e.pointerType !== 'touch') {
+    // a clean click (no drag) is a focus attempt on PC (Section H)
+    if (pointer.down && G.state === 'playing' && pointer.moved < 6 &&
+        performance.now() - pointer.t0 < TAP_MAX_TIME * 1000) {
+      tryFocusAt(pointer.sx, pointer.sy);
+    }
+    pointer.down = false;
+  }
+}
 canvas.addEventListener('pointerdown', onPointerDown);
 window.addEventListener('pointermove', onPointerMove);
 window.addEventListener('pointerup', onPointerUp);
@@ -278,21 +457,64 @@ function moveVector() {
   if (keys.has('s') || keys.has('ArrowDown'))  dy += 1;
   if (dx || dy) { const l = Math.hypot(dx, dy); return { x: dx / l, y: dy / l, mag: 1, src: 'key' }; }
 
-  if (pointer.down) {
-    if (pointer.type === 'touch') {
-      let jx = pointer.x - pointer.sx, jy = pointer.y - pointer.sy;
+  // touch: the dedicated joystick pointer (dead zone kills phantom direction)
+  if (joyId !== null) {
+    const t = touches.get(joyId);
+    if (t) {
+      const jx = t.x - t.sx, jy = t.y - t.sy;
       const l = Math.hypot(jx, jy);
-      if (l < 8) return { x: 0, y: 0, mag: 0, src: 'touch' };
+      if (l < JOY_DEAD) return { x: 0, y: 0, mag: 0, src: 'touch' };
       const mag = Math.min(l / JOY_MAX, 1);
       return { x: jx / l, y: jy / l, mag, src: 'touch' };
-    } else {
-      const jx = pointer.x - W / 2, jy = pointer.y - H / 2;
-      const l = Math.hypot(jx, jy);
-      if (l < 14) return { x: 0, y: 0, mag: 0, src: 'mouse' };
-      return { x: jx / l, y: jy / l, mag: 1, src: 'mouse' };
     }
   }
+  if (pointer.down && pointer.type !== 'touch') {
+    const jx = pointer.x - W / 2, jy = pointer.y - H / 2;
+    const l = Math.hypot(jx, jy);
+    if (l < 14) return { x: 0, y: 0, mag: 0, src: 'mouse' };
+    return { x: jx / l, y: jy / l, mag: 1, src: 'mouse' };
+  }
   return { x: 0, y: 0, mag: 0, src: 'none' };
+}
+
+/* ---- v2 FOCUS TARGET (Section H): tap/click a creature to focus it; auto-
+   aiming weapons prefer the focus while it lives. Same creature toggles off,
+   another switches. Empty space never clears (no accidental drops). ---- */
+const FOCUS_PICK_R = 34;       // screen px — generous pick radius
+const FOCUS_LEAD_R = 800;      // world px — focus must be this close to the querying
+                               // weapon/anchor to steal aim (≈ max projectile reach)
+function effZoom() { return (1 + G.dashZoom) * camZoom; }    // the ONE world<->screen scale
+// radius of the visible world circle — matches the off-screen spawn ring
+function viewRadius() { return Math.hypot(W / camZoom, H / camZoom) / 2; }
+function screenToWorld(sx, sy) {
+  const z = effZoom();
+  return { x: G.cam.x + (sx - W / 2) / z, y: G.cam.y + (sy - H / 2) / z };
+}
+function enemyAtScreen(sx, sy) {
+  const w = screenToWorld(sx, sy);
+  const pickR = FOCUS_PICK_R / effZoom();
+  let best = null, bd = Infinity;
+  for (const e of G.enemies) {
+    if (e.dead) continue;
+    const d = dist(w.x, w.y, e.x, e.y) - e.r;
+    if (d < pickR && d < bd) { bd = d; best = e; }
+  }
+  return best;
+}
+function tryFocusAt(sx, sy) {
+  const best = enemyAtScreen(sx, sy);
+  if (!best) return;                                          // empty space: keep focus
+  G.focusTarget = (G.focusTarget === best) ? null : best;     // toggle / switch
+  if (G.focusTarget) {
+    sfx('hover');
+    spawnRing(best.x, best.y, best.r, best.r + 18, 0.3, WH);
+  }
+}
+function focusAlive() {
+  const f = G.focusTarget;
+  if (f && !f.dead) return f;
+  if (f) G.focusTarget = null;
+  return null;
 }
 
 /* ===========================================================================
@@ -321,24 +543,29 @@ function tryDash() {
   const mv = moveVector();
   let d = (mv.mag > 0) ? { x: mv.x, y: mv.y } : { x: Math.cos(player.aim), y: Math.sin(player.aim) };
   player.dashDir = d;
-  player.dashTime = 0.16;
-  player.dashCD = 1.5;
-  player.invuln = Math.max(player.invuln, 0.28);
+  player.dashTime = DASH_TIME;
+  player.dashCD = DASH_CD;
+  player.invuln = Math.max(player.invuln, DASH_IFRAME);
   sfx('dash');
   for (let i = 0; i < 14; i++)
     spawnParticle(player.x, player.y, -d.x * rand(40, 160) + rand(-40, 40), -d.y * rand(40, 160) + rand(-40, 40), rand(0.2, 0.4), rand(2, 4), CY, 'spark');
 }
 
-function hurtPlayer(dmg) {
+const DMG_IND_T = 0.6;        // s the directional damage indicator stays up (Section L)
+const FIRST_RUN_HINT_T = 14;  // s the first-run hint line stays on screen (Section L)
+function hurtPlayer(dmg, srcX, srcY) {
   if (player.invuln > 0 || player.dashTime > 0 || G.state !== 'playing') return;
   const real = Math.max(1, dmg - player.stats.armor);
   player.hp -= real;
+  G.dirDps += real;                       // feeds the hidden stress signal
+  if (srcX !== undefined) G.dmgDir = { a: angTo(player.x, player.y, srcX, srcY), t: DMG_IND_T };
   player.invuln = 0.75;
   G.shake = Math.min(1, G.shake + 0.5);
   G.flash = 0.6; G.flashColor = RD;
   G.hitstop = Math.max(G.hitstop, 0.06);
   sfx('hurt');
   G.combo = 0;
+  spawnRing(player.x, player.y, player.r, player.r * 4, 0.35, RD);
   for (let i = 0; i < 18; i++)
     spawnParticle(player.x, player.y, rand(-180, 180), rand(-180, 180), rand(0.2, 0.5), rand(2, 4), RD, 'spark');
   if (player.hp <= 0) { player.hp = 0; gameOver(); }
@@ -356,6 +583,11 @@ function hurtPlayer(dmg) {
 const S = () => player.stats;
 
 function nearestEnemy(x, y, maxD) {
+  // focus target wins while alive and in range (Section H) — but never from
+  // beyond FOCUS_LEAD_R: a kited-away focus must not eat shots that can't reach
+  const f = focusAlive();
+  const fr = Math.min(maxD || FOCUS_LEAD_R, FOCUS_LEAD_R);
+  if (f && dist2(x, y, f.x, f.y) <= fr * fr) return f;
   let best = null, bd = (maxD || 1e9) ** 2;
   const arr = G.enemies;
   for (let i = 0; i < arr.length; i++) {
@@ -374,7 +606,14 @@ function nearestEnemies(x, y, n) {
   }
   list.sort((a, b) => a[0] - b[0]);
   const out = [];
-  for (let i = 0; i < Math.min(n, list.length); i++) out.push(list[i][1]);
+  const f = focusAlive();
+  // focus leads the volley — only when in reach of the query point (chain arcs
+  // anchor on the previous hit; a cross-map focus must not bend them away)
+  if (f && dist2(x, y, f.x, f.y) <= FOCUS_LEAD_R * FOCUS_LEAD_R) out.push(f);
+  for (let i = 0; i < list.length && out.length < n; i++) {
+    const e = list[i][1];
+    if (e !== f) out.push(e);
+  }
   return out;
 }
 
@@ -398,6 +637,14 @@ function firePlayerProjectile(o) {
   }
 }
 
+// v2 balance pass (Section B): gentle buffs for under-picked weapons so more
+// builds are viable. Tuned small on purpose; revisit after human playtests.
+const PULSE_CD = 0.6, PULSE_CD_LV4 = 0.09;   // lv4 card says "Faster fire rate" — now true
+const FROST_DPS_BASE = 7;                     // was 5
+const WHIP_DMG_BASE = 24;                     // was 20
+const SENTRY_DMG_BASE = 13, SENTRY_LIFE_BASE = 7;  // was 10 / 6
+const FLAK_DMG_BASE = 11;                     // was 9
+
 const WEAPONS = {
   /* ---- Pulse Cannon : auto-targeting bolts ---- */
   pulse: {
@@ -412,7 +659,7 @@ const WEAPONS = {
     update(self, dt) {
       self.t -= dt;
       const lv = self.level;
-      const cd = 0.6 / S().attackSpeedMul;
+      const cd = (PULSE_CD - (lv >= 4 ? PULSE_CD_LV4 : 0)) / S().attackSpeedMul;
       if (self.t > 0) return;
       self.t = cd;
       const count = 1 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 1 : 0) + (lv >= 7 ? 1 : 0) + (lv >= 9 ? 1 : 0) + (lv >= 11 ? 1 : 0);
@@ -430,6 +677,9 @@ const WEAPONS = {
           r: 6, dmg, pierce, life: 1.4 * S().projDurMul, color: CY, hit: new Set(), trail: 1
         });
       }
+      // muzzle flash (Section J)
+      for (let i = 0; i < 3; i++)
+        spawnParticle(player.x, player.y, rand(-90, 90), rand(-90, 90), 0.15, 2.5, CY, 'spark');
       sfx('shoot');
     }
   },
@@ -591,7 +841,7 @@ const WEAPONS = {
     info(l) {
       const m = ['Fires a piercing beam of light.',
         'Wider beam.', '+45% damage.', 'Faster firing.',
-        '+1 beam &amp; longer.', '+45% damage.', 'Twin overcharged lances.',
+        '+1 beam &amp; longer.', '+45% damage.', '+1 overcharged lance.',
         'Longer beam.', '+1 lance &amp; faster.', 'Wider beam.', 'Prismatic: +lance &amp; damage.'];
       return m[Math.min(l, m.length - 1)];
     },
@@ -639,7 +889,7 @@ const WEAPONS = {
       const lv = self.level;
       const radius = (110 + (lv >= 2 ? 35 : 0) + (lv >= 4 ? 45 : 0) + (lv >= 6 ? 70 : 0) + (lv >= 8 ? 45 : 0) + (lv >= 10 ? 60 : 0)) * S().areaMul;
       const slow = 0.42 + (lv >= 3 ? 0.12 : 0) + (lv >= 6 ? 0.12 : 0) + (lv >= 9 ? 0.08 : 0);
-      const dps = (5 + (lv >= 3 ? 4 : 0) + (lv >= 5 ? 6 : 0) + (lv >= 7 ? 6 : 0) + (lv >= 10 ? 8 : 0)) * S().damageMul;
+      const dps = (FROST_DPS_BASE + (lv >= 3 ? 4 : 0) + (lv >= 5 ? 6 : 0) + (lv >= 7 ? 6 : 0) + (lv >= 10 ? 8 : 0)) * S().damageMul;
       G.frost = { radius, slow, dmg: dps };
       // damage tick handled here
       self.t = (self.t || 0) - dt;
@@ -668,7 +918,7 @@ const WEAPONS = {
       const m = ['Hurls a spinning disc that flies out and returns.',
         '+45% damage.', '+1 disc.', 'Bigger disc &amp; pierce.',
         '+45% damage.', '+1 disc.', 'Bigger disc &amp; pierce.',
-        'Faster return &amp; damage.', 'Triple discs of doom.'];
+        'Faster return &amp; damage.', 'A fourth disc of doom.'];
       return m[Math.min(l, m.length - 1)];
     },
     update(self, dt) {
@@ -833,7 +1083,7 @@ const WEAPONS = {
       const a = target ? angTo(player.x, player.y, target.x, target.y) : player.aim;
       const spd = 430 * S().projSpeedMul;
       const shr = 5 + (lv >= 2 ? 2 : 0) + (lv >= 5 ? 3 : 0) + (lv >= 8 ? 4 : 0);
-      const dmg = 9 * (1 + (lv >= 3 ? 0.4 : 0) + (lv >= 6 ? 0.45 : 0)) * S().damageMul;
+      const dmg = FLAK_DMG_BASE * (1 + (lv >= 3 ? 0.4 : 0) + (lv >= 6 ? 0.45 : 0)) * S().damageMul;
       const spread = 0.6 + (lv >= 4 ? 0.3 : 0) + (lv >= 7 ? 0.5 : 0);
       const life0 = 0.55 * S().projDurMul;
       firePlayerProjectile({ x: player.x, y: player.y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, r: 6, dmg: 0, pierce: 0, life: life0, life0, color: YE, kind: 'flak', shr, shrDmg: dmg, shrSpread: spread, aimA: a, burst: false });
@@ -847,7 +1097,7 @@ const WEAPONS = {
     info(l) {
       const m = ['Lashes a melee arc in your facing direction.',
         '+damage.', 'Wider arc.', '+range.',
-        '+damage.', 'Faster &amp; wider.', '+range.',
+        '+damage &amp; faster.', 'Wider arc.', '+range.',
         '+damage.', 'Double swipe (front &amp; back).'];
       return m[Math.min(l, m.length - 1)];
     },
@@ -859,7 +1109,7 @@ const WEAPONS = {
       self.t = cd;
       const range = (150 + (lv >= 4 ? 40 : 0) + (lv >= 7 ? 50 : 0)) * Math.sqrt(S().areaMul);
       const half = 0.7 + (lv >= 3 ? 0.25 : 0) + (lv >= 6 ? 0.3 : 0);
-      const dmg = (20 + (lv >= 2 ? 8 : 0) + (lv >= 5 ? 8 : 0) + (lv >= 8 ? 12 : 0)) * S().damageMul;
+      const dmg = (WHIP_DMG_BASE + (lv >= 2 ? 8 : 0) + (lv >= 5 ? 8 : 0) + (lv >= 8 ? 12 : 0)) * S().damageMul;
       const swipes = 1 + (lv >= 9 ? 1 : 0);
       for (let s = 0; s < swipes; s++) {
         const aim = player.aim + s * Math.PI;
@@ -897,9 +1147,9 @@ const WEAPONS = {
       if (!self.data) self.data = { drones: [], t: 0 };
       const d = self.data;
       const maxD = 1 + (lv >= 3 ? 1 : 0) + (lv >= 6 ? 1 : 0) + (lv >= 8 ? 1 : 0);
-      const lifeT = 6 + (lv >= 4 ? 3 : 0);
+      const lifeT = SENTRY_LIFE_BASE + (lv >= 4 ? 3 : 0);
       const fireCd = (0.5 - (lv >= 7 ? 0.15 : 0)) / S().attackSpeedMul;
-      const dmg = (10 + (lv >= 2 ? 4 : 0) + (lv >= 5 ? 6 : 0)) * S().damageMul;
+      const dmg = (SENTRY_DMG_BASE + (lv >= 2 ? 4 : 0) + (lv >= 5 ? 6 : 0)) * S().damageMul;
       const pr = lv >= 5 ? 1 : 0;
       for (let i = d.drones.length - 1; i >= 0; i--) {
         const dr = d.drones[i]; dr.t -= dt;
@@ -946,13 +1196,13 @@ const WEAPONS = {
     update(self, dt) {
       const lv = self.level;
       self.t = (self.t || 0) - dt;
-      const cd = (1.5 - (lv >= 4 ? 0.4 : 0) - (lv >= 8 ? 0.3 : 0)) / S().attackSpeedMul;
+      const cd = (1.5 - (lv >= 4 ? 0.4 : 0) - (lv >= 7 ? 0.3 : 0)) / S().attackSpeedMul;   // lv7 card says "Faster storm" — now true (was a dead level)
       if (self.t > 0) return;
       self.t = cd;
       const strikes = 1 + (lv >= 2 ? 1 : 0) + (lv >= 5 ? 2 : 0) + (lv >= 8 ? 2 : 0);
       const dmg = (26 + (lv >= 3 ? 12 : 0) + (lv >= 6 ? 16 : 0)) * S().damageMul;
       const aoe = (70 + (lv >= 6 ? 40 : 0)) * S().areaMul;
-      const reach = Math.hypot(W, H) / 2;
+      const reach = viewRadius();
       const near = (Math.random() < 0.75) ? nearestEnemies(player.x, player.y, 10) : null;
       for (let s = 0; s < strikes; s++) {
         let tx, ty;
@@ -1115,14 +1365,44 @@ function buildChoices() {
     for (let i = 0; i < work.length; i++) { r -= work[i].weight; if (r <= 0) { idx = i; break; } }
     chosen.push(work.splice(idx, 1)[0]);
   }
+  // Early-run variety guarantee (Section B): the first several level-ups always
+  // offer a real build choice — at least one weapon option AND one passive, and
+  // very early also one NEW weapon — so survival never hinges on high-rolling
+  // one specific card.
+  if (player.level <= CARD_VARIETY_LEVELS && chosen.length === 3) {
+    const isWeapon = c => c.kind === 'weapon-new' || c.kind === 'weapon-up';
+    const swapIn = (pred, keep) => {
+      if (chosen.some(pred)) return;
+      const opts = pool.filter(o => pred(o) && !chosen.includes(o));
+      if (!opts.length) return;
+      for (let i = chosen.length - 1; i >= 0; i--) {
+        if (keep(chosen[i])) continue;
+        chosen[i] = pick(opts); return;
+      }
+    };
+    swapIn(isWeapon, () => false);
+    swapIn(c => c.kind === 'passive', c => isWeapon(c) && chosen.filter(isWeapon).length <= 1);
+    if (player.level <= CARD_NEW_WEAPON_LEVELS && player.weapons.length < MAX_WEAPONS) {
+      swapIn(c => c.kind === 'weapon-new',
+             c => (c.kind === 'passive' && chosen.filter(x => x.kind === 'passive').length <= 1));
+    }
+  }
   // fallbacks if everything is maxed
   while (chosen.length < 3) chosen.push({ kind: 'bonus', id: 'bonus' });
   return chosen;
 }
+// Through this level, card offers guarantee a weapon + passive mix; through the
+// lower one they also guarantee a NEW weapon offer when one exists.
+const CARD_VARIETY_LEVELS = 6;
+const CARD_NEW_WEAPON_LEVELS = 4;
 
 function cardData(c) {
-  if (c.kind === 'weapon-new') { const d = WEAPONS[c.id]; return { icon: d.icon, name: d.name, color: d.color, type: 'New Weapon', desc: d.info(1), level: 0, max: d.max, isNew: true }; }
-  if (c.kind === 'weapon-up')  { const d = WEAPONS[c.id]; const w = player.weapons.find(w => w.id === c.id); return { icon: d.icon, name: d.name, color: d.color, type: 'Weapon · Lv ' + (w.level + 1), desc: d.info(w.level + 1), level: w.level, max: d.max }; }
+  // info() arrays are authored as m[newLevel-1] ("what reaching level N gives"),
+  // so pass newLevel-1. v1.x passed newLevel — every weapon card described the
+  // NEXT level's bonus (the reported "card claims an extra ball, levels only
+  // add area" bug). Fixed in v2.
+  if (c.kind === 'weapon-new') { const d = WEAPONS[c.id]; return { icon: d.icon, name: d.name, color: d.color, type: 'New Weapon', desc: d.info(0), level: 0, max: d.max, isNew: true }; }
+  if (c.kind === 'weapon-up')  { const d = WEAPONS[c.id]; const w = player.weapons.find(w => w.id === c.id); return { icon: d.icon, name: d.name, color: d.color, type: 'Weapon · Lv ' + (w.level + 1), desc: d.info(w.level), level: w.level, max: d.max }; }
   if (c.kind === 'passive')    { const d = PASSIVES[c.id]; const lv = player.passives[c.id] || 0; return { icon: d.icon, name: d.name, color: d.color, type: 'Passive · Lv ' + (lv + 1), desc: d.desc, level: lv, max: d.max }; }
   return { icon: '✨', name: 'Power Surge', color: WH, type: 'Bonus', desc: '+8% damage &amp; full heal.', level: 0, max: 0 };
 }
@@ -1221,6 +1501,10 @@ const ETYPES = {
   disruptor:  { hp: 35,  speed: 80,  r: 14, dmg: 8,  xp: 4,  color: MA, shape: 'circle' },
   saw:        { hp: 50,  speed: 80,  r: 16, dmg: 14, xp: 4,  color: YE, shape: 'spiky' },
   juggernaut: { hp: 220, speed: 50,  r: 30, dmg: 24, xp: 12, color: OR, shape: 'hex' },
+  // ARCHITECT rune node (Section D): destructible orbiting part; stats come
+  // from ARCH_NODE_* via spawn opts (fixed difficulty, no time scaling).
+  archnode:   { hp: 1000, speed: 0,  r: 20, dmg: 14, xp: 0,  color: PU, shape: 'penta',
+                noMercy: true, noLevel: true, noSeparation: true },   // fixed stats, orbit-locked
 };
 
 // Late-game difficulty curve. HP ramps hard past ~4 min (cubic term); speed is
@@ -1238,6 +1522,24 @@ function diffScale() {
   };
 }
 
+/* ---- v2 ENEMY LEVELS (Section E): stays 1 through the early game; starts
+   rising after the first full boss cycle OR a time threshold, whichever comes
+   first. Levels >= 2 show a small badge; level 1 shows nothing. ---- */
+const ENEMY_LV_START_TIER = 1;     // unlock after this many completed boss cycles...
+const ENEMY_LV_START_TIME = 480;   // ...or after this many seconds, whichever first
+const ENEMY_LV_PER_MIN = 0.5;      // levels gained per minute past the unlock point
+const ENEMY_LV_MAX = 9;
+const ENEMY_LV_HP = 0.35;          // +hp per level above 1
+const ENEMY_LV_DMG = 0.18;         // +dmg per level above 1
+const ENEMY_LV_SPEED = 0.04;       // +speed per level above 1
+const ENEMY_LV_XP = 0.30;          // +xp per level above 1
+function currentEnemyLevel() {
+  if (G.lvUnlockAt === null) return 1;
+  return clamp(1 + Math.floor((G.time - G.lvUnlockAt) / 60 * ENEMY_LV_PER_MIN), 1, ENEMY_LV_MAX);
+}
+
+const ENEMY_SPAWNIN_T = 0.35;   // s scale/fade-in when an enemy materializes (Section J)
+
 function spawnEnemy(type, x, y, opts) {
   if (G.enemies.length >= MAX_ENEMIES) return null;
   const base = ETYPES[type];
@@ -1248,9 +1550,28 @@ function spawnEnemy(type, x, y, opts) {
     hp: base.hp * d.hp, maxHp: base.hp * d.hp,
     speed: base.speed * d.speed, dmg: base.dmg * d.dmg, xp: base.xp,
     flash: 0, dead: false, slow: 1, fireT: rand(0, 1.5),
-    rot: rand(0, TAU), elite: false, boss: false, spawn: 0.0,
+    rot: rand(0, TAU), elite: false, boss: false, spawn: ENEMY_SPAWNIN_T,
+    noSep: !!base.noSeparation,
   };
   if (opts) Object.assign(e, opts);
+  // Adaptive mercy: when the hidden director says the player is struggling,
+  // fresh normals arrive slightly weaker. Bosses and fixed-stat parts
+  // (archnodes) are NEVER softened.
+  if (!e.boss && !base.noMercy && G.dirIntensity < 1) {
+    const ease = 1 - DIR_STRENGTH_EASE * (1 - G.dirIntensity) / (1 - DIR_INTENSITY_MIN);
+    e.hp *= ease; e.maxHp = e.hp; e.dmg *= ease;
+  }
+  // enemy levels (Section E): late-game normals arrive leveled-up
+  if (!e.boss && !base.noLevel) {
+    e.lv = currentEnemyLevel();
+    if (e.lv > 1) {
+      const k = e.lv - 1;
+      e.hp *= 1 + k * ENEMY_LV_HP; e.maxHp = e.hp;
+      e.dmg *= 1 + k * ENEMY_LV_DMG;
+      e.speed *= 1 + k * ENEMY_LV_SPEED;
+      e.xp = Math.round(e.xp * (1 + k * ENEMY_LV_XP));
+    }
+  }
   if (e.elite) { e.r *= 1.5; e.hp *= 4; e.maxHp = e.hp; e.xp *= 6; e.dmg *= 1.3; }
   G.enemies.push(e);
   return e;
@@ -1258,7 +1579,9 @@ function spawnEnemy(type, x, y, opts) {
 
 function spawnRingPosition() {
   const a = rand(0, TAU);
-  const d = Math.hypot(W, H) / 2 + rand(60, 200);
+  // stressed players get a touch more breathing room (spawns land further out);
+  // camZoom widens the visible area, so the off-screen ring widens with it
+  const d = viewRadius() + rand(60, 200) + G.dirStress * DIR_STRESS_SPACE;
   let x = player.x + Math.cos(a) * d;
   let y = player.y + Math.sin(a) * d;
   const lim = ARENA / 2 - 30;
@@ -1295,58 +1618,110 @@ function pickEnemyType(m) {
   return 'grunt';
 }
 
-// Spawn director tuning. Late-game pressure: lower interval floor + faster batch
-// growth. Elites use a flat (no-luck) chance with a gentle time ramp.
-// NOTE: these constants will be retuned once meta-progression exists.
-const SPAWN_INTERVAL_MIN = 0.14;
-const SPAWN_BATCH_RATE   = 1.0;
+/* ---- v2 ADAPTIVE DIRECTOR (hidden hybrid: RE4 rank + L4D director) ----
+   Baseline: a gentle time curve (much calmer early game than v1.5).
+   Adaptive layer: a hidden intensity from player power (weapon levels,
+   damageMul, rolling clear rate) minus stress (recent damage taken, low HP).
+   Weak/struggling -> fewer + slightly weaker spawns, spawned further out;
+   strong/safe -> pressure climbs. Governs BETWEEN-boss farming windows only;
+   bosses are NEVER softened by it. All weights are named for playtesting. */
+const DIR_INTERVAL_BASE  = 1.65;   // s between spawn ticks at t=0 (was 1.05)
+const DIR_INTERVAL_SLOPE = 0.09;   // interval shrinks this much per minute
+const DIR_INTERVAL_MIN   = 0.30;   // hard floor (was 0.14)
+const DIR_BATCH_RATE     = 0.55;   // batch growth per minute (was 1.0)
+const DIR_PACK_CHANCE    = 0.08;   // pack-burst chance per tick (was 0.12)
+const DIR_PACK_BASE      = 4;      // pack size base (was 6 + minutes)
+const DIR_POWER_WLV      = 0.030;  // power per total weapon level
+const DIR_POWER_DMG      = 0.25;   // power per damageMul above 1
+const DIR_POWER_KPS      = 0.055;  // power per kill/sec (rolling)
+const DIR_STRESS_HP      = 0.90;   // stress per missing-HP fraction
+const DIR_STRESS_DPS     = 0.05;   // stress per damage-taken/sec (rolling)
+const DIR_KPS_HALFLIFE   = 6;      // s half-life of the kill-rate window
+const DIR_DPS_HALFLIFE   = 8;      // s half-life of the damage-taken window
+const DIR_SIGNAL_LERP    = 0.35;   // per-second smoothing toward the target
+const DIR_INTENSITY_MIN  = 0.55;   // throttle floor when struggling
+const DIR_INTENSITY_MAX  = 1.65;   // pressure ceiling when thriving
+const DIR_STRENGTH_EASE  = 0.30;   // up to -30% spawn hp/dmg at full mercy
+const DIR_STRESS_SPACE   = 140;    // extra spawn-ring distance at full stress
+const BOMB_RAMP_TIME     = 25;     // s for spawns to re-ramp after a bomb
 const ELITE_BASE_CHANCE  = 0.02;
 const ELITE_TIME_SCALE   = 0.004;
 const ELITE_CHANCE_MAX   = 0.07;
 function director(dt) {
   const m = G.time / 60;
-  // Normal waves — skipped entirely while a suppress-spawns boss is alive (it
-  // controls the arena; it may still summon its own minions via spawnEnemy).
-  if (!(G.boss && G.boss.suppressSpawns)) {
+
+  // hidden signals (decay-windowed counters -> rates)
+  G.dirKps *= Math.exp(-dt * Math.LN2 / DIR_KPS_HALFLIFE);
+  G.dirDps *= Math.exp(-dt * Math.LN2 / DIR_DPS_HALFLIFE);
+  let wlv = 0; for (const w of player.weapons) wlv += w.level;
+  const kps = G.dirKps * Math.LN2 / DIR_KPS_HALFLIFE;
+  const dps = G.dirDps * Math.LN2 / DIR_DPS_HALFLIFE;
+  const power  = wlv * DIR_POWER_WLV + Math.max(0, S().damageMul - 1) * DIR_POWER_DMG + kps * DIR_POWER_KPS;
+  const stress = (1 - clamp(player.hp / player.maxHp, 0, 1)) * DIR_STRESS_HP + dps * DIR_STRESS_DPS;
+  const target = clamp(1 + power - stress, DIR_INTENSITY_MIN, DIR_INTENSITY_MAX);
+  G.dirIntensity = lerp(G.dirIntensity, target, Math.min(1, DIR_SIGNAL_LERP * dt));
+  G.dirStress = clamp(stress, 0, 1);
+
+  // Normal waves — skipped entirely while a boss is alive (v2: every boss owns
+  // the arena; it may still summon its own minions via spawnEnemy).
+  if (!G.boss) {
     G.spawnTimer -= dt;
-    const interval = clamp(1.05 - m * 0.08, SPAWN_INTERVAL_MIN, 1.05);
+    const interval = clamp(DIR_INTERVAL_BASE - m * DIR_INTERVAL_SLOPE, DIR_INTERVAL_MIN, DIR_INTERVAL_BASE);
     if (G.spawnTimer <= 0) {
       G.spawnTimer = interval;
-      const batch = 1 + Math.floor(m * SPAWN_BATCH_RATE) + (Math.random() < 0.2 ? 2 : 0);
+      const pressure = G.dirIntensity * G.spawnRamp;
+      let batch = Math.round((1 + m * DIR_BATCH_RATE) * pressure);
+      if (G.spawnRamp > 0.2) batch = Math.max(1, batch);
+      if (G.dirIntensity > 1.05 && Math.random() < 0.2) batch += 2;   // spikes only when thriving
       for (let i = 0; i < batch; i++) {
         const p = spawnRingPosition();
         const t = pickEnemyType(m);
         const elite = m > 1.5 && Math.random() < Math.min(ELITE_CHANCE_MAX, ELITE_BASE_CHANCE + m * ELITE_TIME_SCALE);
         spawnEnemy(t, p.x, p.y, elite ? { elite: true } : null);
       }
-      // occasional pack burst
-      if (m > 1 && Math.random() < 0.12) {
+      // occasional pack burst — only while the player isn't being buried
+      if (m > 1 && pressure > 0.9 && Math.random() < DIR_PACK_CHANCE) {
         const p = spawnRingPosition();
         const t = pickEnemyType(m);
-        for (let i = 0; i < 6 + (m | 0); i++)
+        for (let i = 0; i < DIR_PACK_BASE + Math.floor(m * 0.8); i++)
           spawnEnemy(t, p.x + rand(-60, 60), p.y + rand(-60, 60), null);
       }
     }
   }
-  // boss cadence (spawnBoss advances index/tier/bossNum itself)
-  if (!G.boss && G.time >= G.nextBossAt) {
-    spawnBoss();
-    G.nextBossAt += BOSS_INTERVAL;
-  }
+  // boss cadence: bosses are the main event. The next one is scheduled when
+  // the current one dies (killEnemy sets nextBossAt = time + BOSS_FARM_WINDOW).
+  // The ARCHITECT ritual owns the arena: no roster boss may interrupt it.
+  if (!G.boss && !G.ritual && G.time >= G.nextBossAt) spawnBoss();
 }
 
 /* ===========================================================================
    BOSS SYSTEM — registry + spawn + brain (replaces the old inline OVERLORD).
-   Every boss: {id,name,color,r,speed,hpBase,suppressSpawns,drop,phaseThresholds,
-   update(e,dt),draw(e),onPhase?(e,phase)}. The boss enemy carries e.bdef/e.data/
-   e.phase. New Game+: when BOSS_ORDER wraps, bossTier++ (stronger/faster).
+   Every boss: {id,name,color,r,speed,hpMul,drop,phaseThresholds,update(e,dt),
+   draw(e),onPhase?(e,phase)}. The boss enemy carries e.bdef/e.data/e.phase.
+   v2: bosses come from a shuffled bag (no repeats per cycle); every boss
+   suppresses normal spawns and sweeps the arena on arrival; when the bag
+   refills, bossTier++ and bosses return stronger.
    ========================================================================= */
-const BOSS_ORDER = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden'];
-const BOSS_INTERVAL = 150;             // seconds between bosses
-const BOSS_TIER_HP = 0.6;              // +HP per New Game+ tier
-const BOSS_TIER_SPEED = 0.08;          // +speed per tier
-const BOSS_HP_DIFF_BASE = 0.6, BOSS_HP_DIFF = 0.6;  // difficultyFactor = base + diffScale.hp * mul
+const BOSS_IDS = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden'];
+// v2 boss-rush: a shuffled bag picks the next boss — no repeats within a cycle
+// and OVERLORD has no guaranteed intro slot. Scaling comes from ELAPSED TIME +
+// completed cycles (tier), never a per-boss difficulty rank, so a "hard" boss
+// drawn early is fair and any boss drawn late is appropriately tougher.
+const BOSS_BASE_HP        = 950;   // calibrated: opening duel beatable with the starting weapon
+const BOSS_HP_PER_MIN     = 0.55;  // +HP per elapsed minute
+const BOSS_HP_PER_TIER    = 0.85;  // +HP per completed bag cycle
+const BOSS_DMG_BASE       = 18;
+const BOSS_DMG_PER_MIN    = 0.10;
+const BOSS_DMG_PER_TIER   = 0.25;
+const BOSS_SPEED_PER_TIER = 0.08;
+const BOSS_SPEED_PER_MIN  = 0.05;  // restores the v1 time scaling speed had...
+const BOSS_SPEED_TIME_CAP = 1.6;   // ...capped so late bosses stay dodgeable
+const BOSS_XP_LEVELS      = 5;     // a roster boss pays out ~5 level-ups of XP
+const BOSS_GEM_COUNT      = 26;    // ...as a burst of this many gems
+const BOSS_BANNER_T       = 2.4;   // s the WARNING banner stays up
+const BOSS_SWEEP_HITSTOP  = 0.10, BOSS_SWEEP_SHAKE = 0.9;
 const BOSS_PHASE_SHAKE = 0.4;
+function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
 // attack damage as fractions of the boss's own (already diff-scaled) e.dmg
 const B_BULLET = 0.5, B_BEAM = 0.8, B_NOVA = 0.9;
 
@@ -1358,29 +1733,112 @@ function bossRing(e, n, speed, dmgFrac, rot, color, opts) {
 }
 function countType(t) { let n = 0; for (const e of G.enemies) if (e.type === t && !e.dead) n++; return n; }
 
-function spawnBoss() {
-  const id = BOSS_ORDER[G.bossIndex];
+// Boss arrival: the existing swarm is DISINTEGRATED in a spectacular shockwave
+// — per-enemy bursts, expanding rings, flash, hitstop — never silently deleted.
+// Swept enemies yield nothing (no gems/children). Runs BEFORE the boss spawns
+// so the enemy cap can never block the boss itself.
+function bossSweepArena(x, y, color) {
+  let swept = 0;
+  const keep = [];
+  for (const o of G.enemies) {
+    if (o.boss || o.dead) { keep.push(o); continue; }
+    o.dead = true; swept++;
+    spawnRing(o.x, o.y, 4, o.r * 3, 0.5, o.color);   // budget-capped: a 300-strong sweep must not blow the particle pool
+    for (let i = 0; i < 6; i++) {
+      const a = rand(0, TAU), s = rand(80, 380);
+      spawnParticle(o.x, o.y, Math.cos(a) * s, Math.sin(a) * s, rand(0.3, 0.7), rand(2, 4), o.color, 'spark');
+    }
+  }
+  // remove swept enemies NOW (same array object) so the enemy cap can never
+  // block the boss spawn that follows
+  G.enemies.length = 0;
+  for (const o of keep) G.enemies.push(o);
+  G.eProj.length = 0;
+  for (let k = 0; k < 3; k++)
+    spawnRing(x, y, 40, 900 + k * 350, 0.7 + k * 0.15, k % 2 ? WH : color);
+  if (swept) {
+    sfx('bigExplode');
+    G.hitstop = Math.max(G.hitstop, BOSS_SWEEP_HITSTOP);
+    G.shake = Math.min(1, G.shake + BOSS_SWEEP_SHAKE);
+    G.flash = Math.max(G.flash, 0.45); G.flashColor = WH;
+  }
+}
+
+function spawnBoss(forcedId) {
+  if (!G.bossBag.length) {
+    G.bossBag = shuffle(BOSS_IDS.slice());
+    if (G.bossNum > 0) G.bossTier++;          // full cycle completed -> tier up
+  }
+  const id = forcedId || G.bossBag.pop();
   const def = BOSSES[id];
   const p = spawnRingPosition();
-  const dsc = diffScale();
-  const difficultyFactor = BOSS_HP_DIFF_BASE + dsc.hp * BOSS_HP_DIFF;
-  const hp = def.hpBase * (1 + G.bossTier * BOSS_TIER_HP) * difficultyFactor;
+  const mins = G.time / 60;
+  bossSweepArena(p.x, p.y, def.color);        // clear the field first (frees cap room)
+  const hp = BOSS_BASE_HP * (def.hpMul || 1) * (1 + mins * BOSS_HP_PER_MIN + G.bossTier * BOSS_HP_PER_TIER);
   const e = spawnEnemy('tank', p.x, p.y, {
     boss: true, r: def.r, color: def.color, shape: 'boss',
     hp, maxHp: hp,
-    speed: def.speed * dsc.speed * (1 + G.bossTier * BOSS_TIER_SPEED),
-    dmg: 24 * dsc.dmg, xp: 60 + G.bossNum * 20,
+    speed: def.speed * Math.min(BOSS_SPEED_TIME_CAP, 1 + mins * BOSS_SPEED_PER_MIN) * (1 + G.bossTier * BOSS_SPEED_PER_TIER),
+    dmg: BOSS_DMG_BASE * (1 + mins * BOSS_DMG_PER_MIN + G.bossTier * BOSS_DMG_PER_TIER),
+    xp: 60 + G.bossNum * 20,
     name: def.name + (G.bossTier > 0 ? ' ' + romanize(G.bossTier + 1) : ''),
-    bdef: def, data: {}, phase: 0, suppressSpawns: def.suppressSpawns,
+    bdef: def, data: {}, phase: 0,
+    entrance: BOSS_ENTRANCE_T, phasePause: 0,
   });
+  addTelegraph({ kind: 'zone', x: p.x, y: p.y, r: def.r * 2.2, dur: BOSS_ENTRANCE_T, color: def.color });
   G.boss = e;
-  G.bossIndex++;
-  if (G.bossIndex >= BOSS_ORDER.length) { G.bossTier++; G.bossIndex = 1; } // wrap past intro -> NG+
   G.bossNum++;
+  G.bossBanner = { name: e.name, sub: 'THE SWARM SCATTERS — DUEL BEGINS', life: BOSS_BANNER_T, max: BOSS_BANNER_T };
   sfx('boss');
   G.flash = 0.5; G.flashColor = def.color;
   G.shake = 1;
   if (Sound) { Sound.setIntensity(1); Sound.setMusicTempo(126); }
+}
+
+/* ---- THE ARCHITECT: summon ritual + spawn (Section D) ---- */
+function activateSigil() {
+  if (G.sigil !== 1 || G.state !== 'playing' || G.boss || G.ritual) return;
+  G.sigil = 2;
+  G.ritual = { t: ARCH_RITUAL };
+  addTelegraph({ kind: 'zone', x: 0, y: 0, r: ARCH_R * 2.4, dur: ARCH_RITUAL, color: PU });
+  G.bossBanner = { name: 'SOMETHING STIRS BEYOND THE SWARM…', life: 3.0, max: 3.0 };
+  sfx('boss');
+}
+
+function spawnArchitect() {
+  bossSweepArena(0, 0, PU);
+  const def = BOSSES.architect;
+  const e = spawnEnemy('tank', 0, 0, {
+    boss: true, r: ARCH_R, color: PU, shape: 'boss',
+    hp: ARCH_HP, maxHp: ARCH_HP, speed: ARCH_SPEED, dmg: ARCH_DMG,
+    xp: 400, name: def.name, bdef: def, data: {}, phase: 0,
+    entrance: ARCH_ENTRANCE, phasePause: 0,
+  });
+  G.boss = e;
+  G.bossBanner = { name: 'THE ARCHITECT', sub: 'THE SWARM SCATTERS — DUEL BEGINS', life: 3.2, max: 3.2 };
+  G.flash = 0.6; G.flashColor = PU; G.shake = 1;
+  sfx('boss');
+  if (Sound) { Sound.setIntensity(1); Sound.setMusicTempo(132); }
+}
+
+// Delayed-detonation zones (GLITCH corrupted sectors, ARCHITECT rewrites).
+// Ticked from the boss brain AND from the phase-pause breather — a zone's
+// telegraph is already on screen, so its countdown must never freeze while
+// the boss poses (the warning would vanish before the blast).
+function tickZoneList(list, dt, r, e) {
+  if (!list) return;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const z = list[i]; z.t -= dt;
+    if (z.t <= 0) {
+      explodeAt(z.x, z.y, r, YE);
+      if (dist(z.x, z.y, player.x, player.y) < r + player.r) hurtPlayer(e.dmg * B_BULLET);
+      list.splice(i, 1);
+    }
+  }
+}
+function tickBossZones(e, dt) {
+  tickZoneList(e.data.corZones, dt, GLITCH_CORRUPT_R, e);
+  tickZoneList(e.data.sectors, dt, ARCH_SECTOR_R, e);
 }
 
 // Called from EBEHAVIOR.boss (movement is still handled by updateEnemies unless a
@@ -1391,7 +1849,16 @@ function updateBoss(e, dt) {
   for (const t of e.bdef.phaseThresholds) if (fr <= t) ph++;
   if (ph > e.phase) {
     e.phase = ph; e.flash = 1;
-    G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: e.r * 4, life: 0.6, max: 0.6, color: e.color, kind: 'ring' });
+    // cinematic transition: bullet wipe (readable reset), multi-ring burst,
+    // radial sparks, hitstop, and a short attack pause before the new phase
+    G.eProj.length = 0;
+    e.phasePause = Math.max(e.phasePause || 0, BOSS_PHASE_PAUSE);
+    G.hitstop = Math.max(G.hitstop, BOSS_PHASE_HITSTOP);
+    for (let k = 0; k < 3; k++)
+      spawnRing(e.x, e.y, e.r, e.r * (3 + k * 2), 0.5 + k * 0.12, k % 2 ? WH : e.color);
+    for (let k = 0; k < 26; k++) { const a = k / 26 * TAU; spawnParticle(e.x, e.y, Math.cos(a) * rand(150, 420), Math.sin(a) * rand(150, 420), rand(0.4, 0.8), rand(2, 5), e.color, 'spark'); }
+    floater(e.x, e.y - e.r - 26, 'PHASE ' + (e.phase + 1), e.color, 22);
+    G.flash = Math.max(G.flash, 0.3); G.flashColor = e.color;
     sfx('boss'); G.shake = Math.min(1, G.shake + BOSS_PHASE_SHAKE);
     if (e.bdef.onPhase) e.bdef.onPhase(e, e.phase);
   }
@@ -1406,19 +1873,61 @@ const GLITCH_TP_CD = 2.6, GLITCH_BEAM_CD = 4, GLITCH_BEAM_TELE = 0.8, GLITCH_BEA
 const CONDUCTOR_BEAT = 0.476, CONDUCTOR_DROP_BARS = 4, CONDUCTOR_DROP_R = 280, CONDUCTOR_BSPD = 200;
 const WARDEN_PULL = 78, WARDEN_PULL_R = 540, WARDEN_SPIRAL_GAP = 0.13, WARDEN_SPIRAL_SPD = 160, WARDEN_IMP_CD = 8, WARDEN_IMP_R = 360, WARDEN_WELL_CD = 7, WARDEN_WELL_DUR = 4, WARDEN_WELL_R = 190, WARDEN_WELL_PULL = 120;
 
+/* ---- v2 epic-ness (Section C2): entrances, phase cinematics, new attacks ---- */
+const BOSS_ENTRANCE_T = 1.6;       // s materialization (invulnerable, no attacks)
+const BOSS_PHASE_HITSTOP = 0.18;   // s frozen time on a phase transition
+const BOSS_PHASE_PAUSE = 0.6;      // s of attack silence after a transition
+const OVL_COMET_CD = 4.2, OVL_COMET_N = 5, OVL_COMET_SPD = 240;
+const OVL_LASER_CD = 7, OVL_LASER_TELE = 0.9, OVL_LASER_DUR = 2.2, OVL_LASER_N = 3, OVL_LASER_W = 20, OVL_LASER_SWEEP = 0.45, OVL_LASER_LEN = 1200;
+const PRISM_RAIN_CD = 4.5, PRISM_RAIN_N = 7, PRISM_RAIN_SPD = 330, PRISM_RAIN_TELE = 0.55;
+const HIVE_FRENZY_CD = 6, HIVE_FRENZY_T = 2.5, HIVE_FRENZY_MUL = 1.8, HIVE_EGG_SPREAD = 0.5;
+const GLITCH_CORRUPT_CD = 5, GLITCH_CORRUPT_N = 4, GLITCH_CORRUPT_R = 110, GLITCH_CORRUPT_TELE = 0.9;
+const COND_GAPRING_SPD = 180, COND_GAPRING_N = 36, COND_GAPRING_GAP = 5;
+const WARDEN_LANCE_CD = 5, WARDEN_LANCE_N = 3, WARDEN_LANCE_TELE = 0.7, WARDEN_LANCE_SPD = 520;
+
+/* ---- THE ARCHITECT (Section D): voluntary super-boss. Fixed, brutal stats —
+   deliberately NOT touched by the adaptive director or build scaling. ---- */
+const ARCH_HP = 24000, ARCH_DMG = 30, ARCH_R = 110, ARCH_SPEED = 26;
+const ARCH_ENTRANCE = 2.6, ARCH_RITUAL = 4.0;
+const ARCH_NODE_N = 4, ARCH_NODE_HP = 1150, ARCH_NODE_DMG = 14, ARCH_NODE_ORBIT = 230, ARCH_NODE_FIRE = 2.4, ARCH_NODE_SPIN = 0.5;
+const ARCH_SHIELD_MUL = 0.35;     // core damage taken while any rune node lives
+const ARCH_COMET_CD = 3.6, ARCH_COMET_N = 7, ARCH_COMET_SPD = 250;
+const ARCH_BEAM_CD = 7, ARCH_BEAM_TELE = 1.0, ARCH_BEAM_DUR = 2.6, ARCH_BEAM_N = 4, ARCH_BEAM_W = 24, ARCH_BEAM_SWEEP = 0.38, ARCH_BEAM_LEN = 1500;
+const ARCH_SUMMON_CD = 7.5, ARCH_SUMMON_N = 6;
+const ARCH_RAIN_CD = 4.2, ARCH_RAIN_N = 9, ARCH_RAIN_SPD = 360, ARCH_RAIN_TELE = 0.6;
+const ARCH_TP_CD = 3.6;
+const ARCH_SECTOR_CD = 6.5, ARCH_SECTOR_N = 6, ARCH_SECTOR_R = 120, ARCH_SECTOR_TELE = 1.0;
+const ARCH_GAPRING_CD = 3.4, ARCH_GAPRING_N = 44, ARCH_GAPRING_GAP = 6, ARCH_GAPRING_SPD = 190;
+const ARCH_PULL = 60, ARCH_PULL_R = 640;
+const ARCH_SPIRAL_GAP = 0.06, ARCH_SPIRAL_SPD = 200;
+const ARCH_NOVA_CD = 7, ARCH_NOVA_TELE = 1.4, ARCH_NOVA_R = 420;
+const ARCH_ERASE_CD_MUL = 0.7;    // final phase: every cooldown shortened
+const ASCENDANT_DMG = 1.25, ASCENDANT_AS = 1.15, ASCENDANT_INVULN = 5;
+const META_ARCH_DMG = 1.05;       // permanent head start once the ARCHITECT falls
+
 const BOSSES = {
   /* ---- SLOT 0: OVERLORD (intro) ---- */
   overlord: {
-    id: 'overlord', name: 'OVERLORD', color: WH, r: 58, speed: 44, hpBase: 1100,
-    suppressSpawns: false, drop: 'heal', phaseThresholds: [0.5],
+    id: 'overlord', name: 'OVERLORD', color: WH, r: 58, speed: 44, hpMul: 1.0,
+    drop: 'heal', phaseThresholds: [0.66, 0.33],
     update(e, dt) {
-      const d = e.data, p2 = e.phase >= 1;
+      const d = e.data, p2 = e.phase >= 1, p3 = e.phase >= 2;
       d.fireT = (d.fireT ?? OVL_FIRE) - dt;
       if (d.fireT <= 0) {
         d.fireT = p2 ? OVL_FIRE2 : OVL_FIRE;
         bossRing(e, OVL_RINGN, OVL_BSPD, B_BULLET, e.rot, p2 ? MA : WH);
         if (p2) bossRing(e, OVL_RINGN, OVL_BSPD, B_BULLET, e.rot + Math.PI / OVL_RINGN, MA); // double ring
         G.shake = Math.min(1, G.shake + 0.05);
+      }
+      // comet volley: a telegraphed fan of gently-homing comets at the player
+      d.cometT = (d.cometT ?? OVL_COMET_CD) - dt;
+      if (d.cometT <= 0) {
+        d.cometT = OVL_COMET_CD; e.flash = 1;
+        const base = angTo(e.x, e.y, player.x, player.y);
+        for (let k = 0; k < OVL_COMET_N; k++) {
+          const a = base + (k - (OVL_COMET_N - 1) / 2) * 0.16;
+          spawnEnemyProjectile(e.x, e.y, Math.cos(a) * OVL_COMET_SPD, Math.sin(a) * OVL_COMET_SPD, e.dmg * B_BULLET, MA, { kind: 'home', turn: 0.9, life: 3.2, r: 8, arm: 0.25 });
+        }
       }
       d.summonT = (d.summonT ?? OVL_SUMMON_CD) - dt;
       if (d.summonT <= 0) {
@@ -1435,23 +1944,56 @@ const BOSSES = {
           if (d.spEmit <= 0) { d.spEmit = OVL_SPIRAL_GAP; d.spAng = (d.spAng || 0) + 0.4; spawnEnemyProjectile(e.x, e.y, Math.cos(d.spAng) * OVL_SPIRAL_SPD, Math.sin(d.spAng) * OVL_SPIRAL_SPD, e.dmg * B_BULLET, MA); }
         }
       }
+      // phase 3 — CROWN LASERS: a telegraphed rotating tri-beam sweep
+      if (p3) {
+        if (d.lzState === undefined) { d.lzState = 'idle'; d.lzCD = OVL_LASER_CD * 0.5; }
+        if (d.lzState === 'idle') {
+          d.lzCD -= dt;
+          if (d.lzCD <= 0) {
+            d.lzState = 'tele'; d.lzT = OVL_LASER_TELE; d.lzAng = angTo(e.x, e.y, player.x, player.y);
+            for (let k = 0; k < OVL_LASER_N; k++)
+              addTelegraph({ kind: 'line', x: e.x, y: e.y, a: d.lzAng + k / OVL_LASER_N * TAU, len: OVL_LASER_LEN, w: 9, dur: OVL_LASER_TELE, color: MA });
+          }
+        } else if (d.lzState === 'tele') {
+          d.lzT -= dt; if (d.lzT <= 0) { d.lzState = 'fire'; d.lzT = OVL_LASER_DUR; }
+        } else {
+          d.lzT -= dt; d.lzAng += OVL_LASER_SWEEP * dt;
+          for (let k = 0; k < OVL_LASER_N; k++) {
+            const a = d.lzAng + k / OVL_LASER_N * TAU;
+            const ex = e.x + Math.cos(a) * OVL_LASER_LEN, ey = e.y + Math.sin(a) * OVL_LASER_LEN;
+            G.beams.push({ x1: e.x, y1: e.y, x2: ex, y2: ey, w: OVL_LASER_W, life: 0.05, max: 0.05, color: MA });
+            if (segDist(e.x, e.y, ex, ey, player.x, player.y) < OVL_LASER_W / 2 + player.r) hurtPlayer(e.dmg * B_BEAM);
+          }
+          if (d.lzT <= 0) { d.lzState = 'idle'; d.lzCD = OVL_LASER_CD; }
+        }
+      }
     },
     draw(e) {
-      const c2 = e.phase >= 1 ? MA : WH;
+      const c2 = e.phase >= 2 ? MA : e.phase >= 1 ? PK : WH;
       glow(e.x, e.y, e.r * 1.7, c2, 0.7);
+      // orbiting crown shards (the lasers fire from these in phase 3)
+      for (let k = 0; k < 6; k++) {
+        const a = G.time * 0.9 + k / 6 * TAU, rr = e.r * 1.35 + Math.sin(G.time * 3 + k) * 6;
+        const sx = e.x + Math.cos(a) * rr, sy = e.y + Math.sin(a) * rr;
+        ctx.strokeStyle = rgba(c2, 0.85); ctx.lineWidth = 2;
+        poly(sx, sy, 9, 3, a + Math.PI / 2); ctx.stroke();
+        glow(sx, sy, 7, c2, 0.5);
+      }
       ctx.fillStyle = rgba(c2, 0.16); ctx.strokeStyle = rgba(WH, 0.95); ctx.lineWidth = 4;
       star(e.x, e.y, e.r, 6, e.rot, 0.6); ctx.fill(); ctx.stroke();
       const pulse = 1 + 0.08 * Math.sin(G.time * 5);
       ctx.strokeStyle = rgba(c2, 0.9); ctx.lineWidth = 3;
       poly(e.x, e.y, e.r * 0.45 * pulse, 6, -e.rot * 1.6); ctx.stroke();
-      glow(e.x, e.y, e.r * 0.3, WH, 0.9);
+      ctx.strokeStyle = rgba(WH, 0.5); ctx.lineWidth = 2;       // counter-rotating hexagram
+      star(e.x, e.y, e.r * 0.72, 6, e.rot * 0.5 + 0.5, 0.5); ctx.stroke();
+      glow(e.x, e.y, e.r * 0.3 * pulse, WH, 0.9);
     },
   },
 
   /* ---- SLOT 1: PRISM — The Refractor ---- */
   prism: {
-    id: 'prism', name: 'PRISM', color: CY, r: 54, speed: 40, hpBase: 1400,
-    suppressSpawns: false, drop: 'prism', phaseThresholds: [0.66, 0.33],
+    id: 'prism', name: 'PRISM', color: CY, r: 54, speed: 40, hpMul: 1.05,
+    drop: 'prism', phaseThresholds: [0.66, 0.33],
     update(e, dt) {
       const d = e.data, cols = [CY, MA, YE];
       if (d.beamState === undefined) { d.beamState = 'idle'; d.beamCD = PRISM_BEAM_CD; }
@@ -1480,6 +2022,17 @@ const BOSSES = {
           for (let k = -2; k <= 2; k++) { const a = base + k * 0.12; spawnEnemyProjectile(e.x, e.y, Math.cos(a) * PRISM_BSPD, Math.sin(a) * PRISM_BSPD, e.dmg * B_BULLET, cols[f], { kind: 'home', turn: 1.1, life: 3 }); }
         }
       }
+      // phase 2+ — chromatic shard rain (telegraphed falling squares)
+      if (e.phase >= 1) {
+        d.rainCD = (d.rainCD ?? PRISM_RAIN_CD) - dt;
+        if (d.rainCD <= 0) {
+          d.rainCD = PRISM_RAIN_CD;
+          for (let k = 0; k < PRISM_RAIN_N; k++) {
+            const px = player.x + rand(-360, 360);
+            spawnEnemyProjectile(px, player.y - rand(380, 520), 0, PRISM_RAIN_SPD, e.dmg * B_BULLET, cols[k % 3], { kind: 'square', r: 8, arm: PRISM_RAIN_TELE, life: 5 });
+          }
+        }
+      }
       // phase 3 — mirror clones
       if (e.phase >= 2) {
         d.cloneCD = (d.cloneCD ?? PRISM_CLONE_CD) - dt;
@@ -1494,6 +2047,9 @@ const BOSSES = {
         }
       }
     },
+    onPhase(e) {       // refraction nova punctuates every phase transition
+      bossRing(e, 18 + e.phase * 6, 200, B_BULLET, rand(0, TAU), [CY, MA, YE][e.phase % 3]);
+    },
     draw(e) {
       glow(e.x, e.y, e.r * 1.5, WH, 0.55);
       ctx.fillStyle = rgba(WH, 0.12); ctx.strokeStyle = rgba(WH, 0.95); ctx.lineWidth = 4;
@@ -1501,21 +2057,29 @@ const BOSSES = {
       glow(e.x, e.y, e.r * 0.4, WH, 0.95);
       const cols = [CY, MA, YE];
       for (let k = 0; k < 3; k++) { const a = e.rot + k / 3 * TAU, vx = e.x + Math.cos(a) * e.r * 0.92, vy = e.y + Math.sin(a) * e.r * 0.92, lit = (Math.floor(G.time * 3) % 3) === k; glow(vx, vy, lit ? 13 : 7, cols[k], lit ? 1 : 0.55); }
+      // refraction halo: counter-rotating outer triad + colored light nodes
+      ctx.strokeStyle = rgba(CY, 0.3); ctx.lineWidth = 2;
+      poly(e.x, e.y, e.r * 1.5, 3, -e.rot * 0.7); ctx.stroke();
+      for (let k = 0; k < 3; k++) {
+        const a = -e.rot * 0.7 + k / 3 * TAU + Math.PI / 2;
+        glow(e.x + Math.cos(a) * e.r * 1.5, e.y + Math.sin(a) * e.r * 1.5, 6, cols[k], 0.6);
+      }
       if (e.data.clones) for (const cl of e.data.clones) { ctx.fillStyle = rgba(CY, 0.10); ctx.strokeStyle = rgba(WH, 0.5); ctx.lineWidth = 2; poly(cl.x, cl.y, e.r * 0.7, 3, e.rot); ctx.fill(); ctx.stroke(); }
     },
   },
 
   /* ---- SLOT 2: THE HIVE — Dronemother (the spawner) ---- */
   hive: {
-    id: 'hive', name: 'THE HIVE', color: GR, r: 58, speed: 34, hpBase: 1800,
-    suppressSpawns: false, drop: 'nectar', phaseThresholds: [0.5],
+    id: 'hive', name: 'THE HIVE', color: GR, r: 58, speed: 34, hpMul: 1.15,
+    drop: 'nectar', phaseThresholds: [0.6, 0.3],
     update(e, dt) {
       const d = e.data, p2 = e.phase >= 1;
       d.droneCD = (d.droneCD ?? HIVE_DRONE_CD) - dt;
       if (d.droneCD <= 0) {
         d.droneCD = p2 ? HIVE_DRONE_CD * 0.6 : HIVE_DRONE_CD;
         const n = randi(3, 5);
-        for (let k = 0; k < n; k++) { if (countType('mini') >= HIVE_DRONE_CAP) break; const a = k / n * TAU + e.rot; spawnEnemy('mini', e.x + Math.cos(a) * e.r, e.y + Math.sin(a) * e.r, { vx: Math.cos(a) * 90, vy: Math.sin(a) * 90 }); }
+        let minis = countType('mini');       // count once, not per spawned drone
+        for (let k = 0; k < n && minis < HIVE_DRONE_CAP; k++, minis++) { const a = k / n * TAU + e.rot; spawnEnemy('mini', e.x + Math.cos(a) * e.r, e.y + Math.sin(a) * e.r, { vx: Math.cos(a) * 90, vy: Math.sin(a) * 90 }); }
       }
       d.wallCD = (d.wallCD ?? HIVE_WALL_CD) - dt;
       if (d.wallCD <= 0) {
@@ -1530,8 +2094,21 @@ const BOSSES = {
       d.eggCD = (d.eggCD ?? HIVE_EGG_CD) - dt;
       if (d.eggCD <= 0) {
         d.eggCD = HIVE_EGG_CD;
-        const a = angTo(e.x, e.y, player.x, player.y) + rand(-0.4, 0.4);
-        spawnEnemyProjectile(e.x, e.y, Math.cos(a) * 95, Math.sin(a) * 95, e.dmg * B_BULLET, GR, { kind: 'egg', hatch: 1.5, hatchN: randi(6, 8), r: 11, life: 6 });
+        const base = angTo(e.x, e.y, player.x, player.y) + rand(-0.4, 0.4);
+        const eggs = 1 + (p2 ? 2 : 0);                       // phase 2: a spread of three
+        for (let k = 0; k < eggs; k++) {
+          const a = base + (k - (eggs - 1) / 2) * HIVE_EGG_SPREAD;
+          spawnEnemyProjectile(e.x, e.y, Math.cos(a) * 95, Math.sin(a) * 95, e.dmg * B_BULLET, GR, { kind: 'egg', hatch: 1.5, hatchN: randi(6, 8), r: 11, life: 6 });
+        }
+      }
+      // phase 3 — pheromone frenzy: a pulse that whips every drone into a rush
+      if (e.phase >= 2) {
+        d.frzCD = (d.frzCD ?? HIVE_FRENZY_CD) - dt;
+        if (d.frzCD <= 0) {
+          d.frzCD = HIVE_FRENZY_CD; e.flash = 1;
+          G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: 700, life: 0.6, max: 0.6, color: YE, kind: 'ring' });
+          for (const o of G.enemies) if (!o.dead && o.type === 'mini') { o.frenzy = HIVE_FRENZY_T; o.flash = Math.max(o.flash, 0.5); }
+        }
       }
     },
     draw(e) {
@@ -1542,13 +2119,18 @@ const BOSSES = {
       ctx.lineWidth = 1.5; ctx.strokeStyle = rgba(YE, 0.5);
       for (let k = 0; k < 6; k++) { const a = e.rot * 0.2 + k / 6 * TAU, cx = e.x + Math.cos(a) * e.r * 0.5, cy = e.y + Math.sin(a) * e.r * 0.5; poly(cx, cy, e.r * 0.22, 6, e.rot * 0.2); ctx.stroke(); }
       glow(e.x, e.y, e.r * 0.32 * breathe, YE, 0.9);
+      // larvae glints pulsing inside the comb cells
+      for (let k = 0; k < 6; k++) {
+        const a = e.rot * 0.2 + k / 6 * TAU, cx = e.x + Math.cos(a) * e.r * 0.5, cy = e.y + Math.sin(a) * e.r * 0.5;
+        glow(cx, cy, 4 + 2 * Math.sin(G.time * 5 + k * 1.7), GR, 0.55);
+      }
     },
   },
 
   /* ---- SLOT 3: GLITCH — The Corrupted ---- */
   glitch: {
-    id: 'glitch', name: 'GLITCH', color: CY, r: 50, speed: 40, hpBase: 1500,
-    suppressSpawns: true, drop: 'cleansave', phaseThresholds: [0.5],
+    id: 'glitch', name: 'GLITCH', color: CY, r: 50, speed: 40, hpMul: 1.05,
+    drop: 'cleansave', phaseThresholds: [0.5],
     update(e, dt) {
       const d = e.data, p2 = e.phase >= 1;
       d.tpCD = (d.tpCD ?? GLITCH_TP_CD) - dt;
@@ -1571,6 +2153,19 @@ const BOSSES = {
       // ERROR rain
       d.rainCD = (d.rainCD ?? GLITCH_RAIN_CD) - dt;
       if (d.rainCD <= 0) { d.rainCD = GLITCH_RAIN_CD; const n = randi(5, 8); for (let k = 0; k < n; k++) { const px = player.x + rand(-320, 320); spawnEnemyProjectile(px, player.y - 440, 0, GLITCH_RAIN_SPD, e.dmg * B_BULLET, CY, { kind: 'square', r: 8, arm: GLITCH_RAIN_TELE, life: 5 }); } }
+      // phase 2 — corrupted sectors: telegraphed zones that violently recompile
+      if (p2) {
+        d.corCD = (d.corCD ?? GLITCH_CORRUPT_CD) - dt;
+        if (d.corCD <= 0) {
+          d.corCD = GLITCH_CORRUPT_CD; d.corZones = d.corZones || [];
+          for (let k = 0; k < GLITCH_CORRUPT_N; k++) {
+            const zx = player.x + rand(-300, 300), zy = player.y + rand(-300, 300);
+            d.corZones.push({ x: zx, y: zy, t: GLITCH_CORRUPT_TELE });
+            addTelegraph({ kind: 'zone', x: zx, y: zy, r: GLITCH_CORRUPT_R, dur: GLITCH_CORRUPT_TELE, color: YE });
+          }
+        }
+      }
+      tickZoneList(d.corZones, dt, GLITCH_CORRUPT_R, e);
       // phase 2 — glitch hiccup (mostly visual; brief, telegraphed, rare)
       if (p2) { d.hicCD = (d.hicCD ?? GLITCH_HIC_CD) - dt; if (d.hicCD <= 0) { d.hicCD = GLITCH_HIC_CD; G.glitchFX = 1; G.inputHiccup = 0.3; } }
     },
@@ -1588,18 +2183,38 @@ const BOSSES = {
       ctx.strokeStyle = rgba(MA, 0.8); poly(e.x + off, e.y + j, e.r, 4, e.rot); ctx.stroke();
       ctx.strokeStyle = rgba(YE, 0.7); poly(e.x, e.y - off, e.r, 4, e.rot); ctx.stroke();
       ctx.fillStyle = rgba('#05030f', 0.6); poly(e.x, e.y, e.r * 0.8, 4, e.rot); ctx.fill();
+      if (Math.random() < 0.2) {              // datamosh slice across the body
+        ctx.fillStyle = rgba('#05030f', 0.8);
+        ctx.fillRect(e.x - e.r * 1.4, e.y + rand(-e.r, e.r), e.r * 2.8, rand(2, 7));
+      }
       glow(e.x, e.y, e.r * 0.6, WH, 0.4);
     },
   },
 
   /* ---- SLOT 4: THE CONDUCTOR — Synthwave Heart ---- */
   conductor: {
-    id: 'conductor', name: 'THE CONDUCTOR', color: MA, r: 50, speed: 38, hpBase: 1700,
-    suppressSpawns: true, drop: 'tempo', phaseThresholds: [0.66, 0.33],
+    id: 'conductor', name: 'THE CONDUCTOR', color: MA, r: 50, speed: 38, hpMul: 1.1,
+    drop: 'tempo', phaseThresholds: [0.66, 0.33],
     update(e, dt) {
       const d = e.data;
       if (d.beat === undefined) { d.beat = 0; d.beatT = 0; d.bars = 0; }
-      if (d.dropPending > 0) { d.dropPending -= dt; if (d.dropPending <= 0) { bossRing(e, 40, 230, B_NOVA, rand(0, TAU), MA); G.shake = Math.min(1, G.shake + 0.35); if (Sound) Sound.setIntensity(1); } }
+      if (d.dropPending > 0) {
+        d.dropPending -= dt;
+        if (d.dropPending <= 0) {
+          bossRing(e, 40, 230, B_NOVA, rand(0, TAU), MA);
+          // phase 2+: a slower crescendo ring with ONE safe gap to thread
+          if (e.phase >= 1) {
+            const gap = (Math.random() * COND_GAPRING_N) | 0;
+            for (let k = 0; k < COND_GAPRING_N; k++) {
+              if ((k - gap + COND_GAPRING_N) % COND_GAPRING_N < COND_GAPRING_GAP) continue;
+              const a = k / COND_GAPRING_N * TAU;
+              spawnEnemyProjectile(e.x, e.y, Math.cos(a) * COND_GAPRING_SPD, Math.sin(a) * COND_GAPRING_SPD, e.dmg * B_BULLET, YE, { r: 8 });
+            }
+          }
+          G.shake = Math.min(1, G.shake + 0.35);
+          if (Sound) Sound.setIntensity(1);
+        }
+      }
       d.beatT -= dt;
       if (d.beatT <= 0) {
         d.beatT += CONDUCTOR_BEAT / (1 + e.phase * 0.12); d.beat++; e.flash = 0.6;
@@ -1618,13 +2233,24 @@ const BOSSES = {
       const bars = 24;
       for (let k = 0; k < bars; k++) { const a = k / bars * TAU + e.rot * 0.3, h = e.r * 0.5 + e.r * 0.7 * Math.abs(Math.sin(G.time * 6 + k * 0.5)) * (0.5 + beatPhase * 0.5); const x1 = e.x + Math.cos(a) * e.r * 0.8, y1 = e.y + Math.sin(a) * e.r * 0.8, x2 = e.x + Math.cos(a) * (e.r * 0.8 + h), y2 = e.y + Math.sin(a) * (e.r * 0.8 + h); ctx.strokeStyle = rgba(k % 2 ? MA : CY, 0.8); ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
       glow(e.x, e.y, e.r * 0.3 * (1 + 0.25 * beatPhase), MA, 0.95);
+      if (beatPhase > 0.82) {                  // beat-synced light rays
+        ctx.strokeStyle = rgba(WH, (beatPhase - 0.82) * 3);
+        ctx.lineWidth = 2;
+        for (let k = 0; k < 4; k++) {
+          const a = e.rot * 0.3 + k / 4 * TAU + Math.PI / 4;
+          ctx.beginPath();
+          ctx.moveTo(e.x + Math.cos(a) * e.r * 1.1, e.y + Math.sin(a) * e.r * 1.1);
+          ctx.lineTo(e.x + Math.cos(a) * e.r * 2.4, e.y + Math.sin(a) * e.r * 2.4);
+          ctx.stroke();
+        }
+      }
     },
   },
 
   /* ---- SLOT 5: WARDEN — The Gravity Well ---- */
   warden: {
-    id: 'warden', name: 'THE WARDEN', color: PU, r: 54, speed: 40, hpBase: 1900,
-    suppressSpawns: true, drop: 'singularity', phaseThresholds: [0.66, 0.33],
+    id: 'warden', name: 'THE WARDEN', color: PU, r: 54, speed: 40, hpMul: 1.2,
+    drop: 'singularity', phaseThresholds: [0.66, 0.33],
     update(e, dt) {
       const d = e.data, lim = ARENA / 2 - player.r;
       // continuous gravity pull (gentle, escapable by moving/dashing)
@@ -1643,6 +2269,27 @@ const BOSSES = {
         if (d.wellCD <= 0 && (!d.wells || d.wells.length === 0)) { d.wellCD = WARDEN_WELL_CD; d.wells = []; const n = randi(2, 3); for (let k = 0; k < n; k++) { const a = rand(0, TAU), r = rand(160, 300), wlim = ARENA / 2 - 40, wx = clamp(player.x + Math.cos(a) * r, -wlim, wlim), wy = clamp(player.y + Math.sin(a) * r, -wlim, wlim); d.wells.push({ x: wx, y: wy, t: WARDEN_WELL_DUR, fireT: rand(0, 0.5) }); addTelegraph({ kind: 'zone', x: wx, y: wy, r: 80, dur: 0.8, color: PU }); } }
         if (d.wells) for (let i = d.wells.length - 1; i >= 0; i--) { const w = d.wells[i]; w.t -= dt; const wa = angTo(player.x, player.y, w.x, w.y), wd = dist(player.x, player.y, w.x, w.y); if (wd < WARDEN_WELL_R && wd > 30) { player.x = clamp(player.x + Math.cos(wa) * WARDEN_WELL_PULL * dt, -lim, lim); player.y = clamp(player.y + Math.sin(wa) * WARDEN_WELL_PULL * dt, -lim, lim); } w.fireT -= dt; if (w.fireT <= 0) { w.fireT = 0.7; bossRing({ x: w.x, y: w.y, dmg: e.dmg }, 6, 140, B_BULLET, rand(0, TAU), PU); } if (w.t <= 0) d.wells.splice(i, 1); }
       }
+      // phase 3 — graviton lances: telegraphed triple piercing shots
+      if (e.phase >= 2) {
+        if (d.lanceState === undefined) { d.lanceState = 'idle'; d.lanceCD = WARDEN_LANCE_CD; }
+        if (d.lanceState === 'idle') {
+          d.lanceCD -= dt;
+          if (d.lanceCD <= 0) {
+            d.lanceState = 'tele'; d.lanceT = WARDEN_LANCE_TELE; d.lanceA = angTo(e.x, e.y, player.x, player.y);
+            for (let k = 0; k < WARDEN_LANCE_N; k++)
+              addTelegraph({ kind: 'line', x: e.x, y: e.y, a: d.lanceA + (k - 1) * 0.18, len: 1100, w: 8, dur: WARDEN_LANCE_TELE, color: PK });
+          }
+        } else {
+          d.lanceT -= dt;
+          if (d.lanceT <= 0) {
+            d.lanceState = 'idle'; d.lanceCD = WARDEN_LANCE_CD; e.flash = 1;
+            for (let k = 0; k < WARDEN_LANCE_N; k++) {
+              const a = d.lanceA + (k - 1) * 0.18;
+              spawnEnemyProjectile(e.x, e.y, Math.cos(a) * WARDEN_LANCE_SPD, Math.sin(a) * WARDEN_LANCE_SPD, e.dmg * B_BULLET, PK, { r: 9, life: 3 });
+            }
+          }
+        }
+      }
     },
     draw(e) {
       glow(e.x, e.y, e.r * 1.2, PU, 0.5);
@@ -1650,7 +2297,206 @@ const BOSSES = {
       for (let k = 0; k < 3; k++) { const rr = e.r * (0.6 + k * 0.28); ctx.strokeStyle = rgba(k % 2 ? PU : BL, 0.7); ctx.lineWidth = 3; ctx.beginPath(); for (let s = 0; s <= 24; s++) { const a = e.rot * (1 + k * 0.3) + s / 24 * TAU, x = e.x + Math.cos(a) * rr, y = e.y + Math.sin(a) * rr; if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); } ctx.stroke(); }
       ctx.fillStyle = rgba('#05030f', 0.92); ctx.beginPath(); ctx.arc(e.x, e.y, e.r * 0.5, 0, TAU); ctx.fill();
       glow(e.x, e.y, e.r * 0.3, PU, 0.85);
+      for (let k = 0; k < 8; k++) {            // orbiting debris shards
+        const a = G.time * 1.4 + k / 8 * TAU, rr = e.r * 1.55 + Math.sin(G.time * 2.2 + k) * 8;
+        glow(e.x + Math.cos(a) * rr, e.y + Math.sin(a) * rr, 5, k % 2 ? BL : PU, 0.6);
+      }
       if (e.data.wells) for (const w of e.data.wells) { glow(w.x, w.y, 20, PU, 0.7); ctx.strokeStyle = rgba(BL, 0.5); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(w.x, w.y, WARDEN_WELL_R, 0, TAU); ctx.stroke(); ctx.fillStyle = rgba('#05030f', 0.85); ctx.beginPath(); ctx.arc(w.x, w.y, 10, 0, TAU); ctx.fill(); }
+    },
+  },
+
+  /* ---- THE ARCHITECT — the intelligence behind the swarm (Section D).
+     Voluntary super-boss: 5 phases, 4 destructible rune nodes shielding the
+     core, evolved versions of every roster boss's signature, fixed brutal
+     stats. Summoned only via the forged SIGIL. ---- */
+  architect: {
+    id: 'architect', name: 'THE ARCHITECT', color: PU, r: ARCH_R, speed: ARCH_SPEED, hpMul: 1,
+    drop: 'ascendant', phaseThresholds: [0.8, 0.6, 0.4, 0.2],
+    update(e, dt) {
+      const d = e.data;
+      const F = e.phase >= 4 ? ARCH_ERASE_CD_MUL : 1;        // ERASE: all cooldowns shortened
+      if (!d.init) {                                          // deploy the rune nodes once
+        d.init = true; d.nodes = [];
+        for (let k = 0; k < ARCH_NODE_N; k++) {
+          const n = spawnEnemy('archnode', e.x + 10, e.y, {
+            hp: ARCH_NODE_HP, maxHp: ARCH_NODE_HP, dmg: ARCH_NODE_DMG,
+            arch: e, orbA: k / ARCH_NODE_N * TAU, fireT: rand(0.5, 2),
+          });
+          if (n) d.nodes.push(n);
+        }
+      }
+      e.shieldMul = (d.nodes && d.nodes.some(n => !n.dead)) ? ARCH_SHIELD_MUL : null;
+
+      // comet fans — constant pressure in every phase
+      d.cometT = (d.cometT ?? ARCH_COMET_CD) - dt;
+      if (d.cometT <= 0) {
+        d.cometT = ARCH_COMET_CD * F;
+        const base = angTo(e.x, e.y, player.x, player.y);
+        for (let k = 0; k < ARCH_COMET_N; k++) {
+          const a = base + (k - (ARCH_COMET_N - 1) / 2) * 0.13;
+          spawnEnemyProjectile(e.x, e.y, Math.cos(a) * ARCH_COMET_SPD, Math.sin(a) * ARCH_COMET_SPD, e.dmg * B_BULLET, MA, { kind: 'home', turn: 0.8, life: 3.4, r: 8, arm: 0.25 });
+        }
+      }
+      // SURVEY — quad rune beams, telegraphed rotating sweep (OVERLORD evolved)
+      if (d.bmState === undefined) { d.bmState = 'idle'; d.bmCD = ARCH_BEAM_CD * 0.6; }
+      if (d.bmState === 'idle') {
+        d.bmCD -= dt;
+        if (d.bmCD <= 0) {
+          d.bmState = 'tele'; d.bmT = ARCH_BEAM_TELE; d.bmA = angTo(e.x, e.y, player.x, player.y);
+          for (let k = 0; k < ARCH_BEAM_N; k++)
+            addTelegraph({ kind: 'line', x: e.x, y: e.y, a: d.bmA + k / ARCH_BEAM_N * TAU, len: ARCH_BEAM_LEN, w: 10, dur: ARCH_BEAM_TELE, color: MA });
+        }
+      } else if (d.bmState === 'tele') {
+        d.bmT -= dt; if (d.bmT <= 0) { d.bmState = 'fire'; d.bmT = ARCH_BEAM_DUR; }
+      } else {
+        d.bmT -= dt; d.bmA += ARCH_BEAM_SWEEP * dt * (e.phase >= 2 ? 1.3 : 1);
+        for (let k = 0; k < ARCH_BEAM_N; k++) {
+          const a = d.bmA + k / ARCH_BEAM_N * TAU;
+          const ex = e.x + Math.cos(a) * ARCH_BEAM_LEN, ey = e.y + Math.sin(a) * ARCH_BEAM_LEN;
+          G.beams.push({ x1: e.x, y1: e.y, x2: ex, y2: ey, w: ARCH_BEAM_W, life: 0.05, max: 0.05, color: MA });
+          if (segDist(e.x, e.y, ex, ey, player.x, player.y) < ARCH_BEAM_W / 2 + player.r) hurtPlayer(e.dmg * B_BEAM);
+        }
+        if (d.bmT <= 0) { d.bmState = 'idle'; d.bmCD = ARCH_BEAM_CD * F; }
+      }
+      // REPLICATE (phase 2+): drone broods + chromatic shard rain (HIVE/PRISM evolved)
+      if (e.phase >= 1) {
+        d.sumT = (d.sumT ?? ARCH_SUMMON_CD) - dt;
+        if (d.sumT <= 0) {
+          d.sumT = ARCH_SUMMON_CD * F;
+          for (let k = 0; k < ARCH_SUMMON_N; k++) {
+            const a = k / ARCH_SUMMON_N * TAU;
+            spawnEnemy('mini', e.x + Math.cos(a) * (e.r + 30), e.y + Math.sin(a) * (e.r + 30), { vx: Math.cos(a) * 140, vy: Math.sin(a) * 140 });
+          }
+          G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: e.r * 2.2, life: 0.4, max: 0.4, color: GR, kind: 'ring' });
+        }
+        d.rainT = (d.rainT ?? ARCH_RAIN_CD) - dt;
+        if (d.rainT <= 0) {
+          d.rainT = ARCH_RAIN_CD * F;
+          for (let k = 0; k < ARCH_RAIN_N; k++)
+            spawnEnemyProjectile(player.x + rand(-420, 420), player.y - rand(400, 560), 0, ARCH_RAIN_SPD, e.dmg * B_BULLET, [CY, MA, YE][k % 3], { kind: 'square', r: 8, arm: ARCH_RAIN_TELE, life: 5 });
+        }
+      }
+      // REWRITE (phase 3+): reality blinks + corrupted sectors (GLITCH evolved)
+      if (e.phase >= 2) {
+        d.tpT = (d.tpT ?? ARCH_TP_CD) - dt;
+        if (d.tpT <= 0) {
+          d.tpT = ARCH_TP_CD * F;
+          const a = rand(0, TAU), rr = rand(260, 460), lim2 = ARENA / 2 - e.r;
+          e.x = clamp(player.x + Math.cos(a) * rr, -lim2, lim2);
+          e.y = clamp(player.y + Math.sin(a) * rr, -lim2, lim2);
+          e.vx = 0; e.vy = 0;
+          for (let k = 0; k < 14; k++) spawnParticle(e.x, e.y, rand(-200, 200), rand(-200, 200), 0.35, 3, pick([PU, MA, CY]), 'spark');
+        }
+        d.secT = (d.secT ?? ARCH_SECTOR_CD) - dt;
+        if (d.secT <= 0) {
+          d.secT = ARCH_SECTOR_CD * F; d.sectors = d.sectors || [];
+          for (let k = 0; k < ARCH_SECTOR_N; k++) {
+            const zx = player.x + rand(-340, 340), zy = player.y + rand(-340, 340);
+            d.sectors.push({ x: zx, y: zy, t: ARCH_SECTOR_TELE });
+            addTelegraph({ kind: 'zone', x: zx, y: zy, r: ARCH_SECTOR_R, dur: ARCH_SECTOR_TELE, color: YE });
+          }
+        }
+      }
+      tickZoneList(d.sectors, dt, ARCH_SECTOR_R, e);
+      // CONDUCT (phase 4+): gravity grip + gap rings + twin spiral arms
+      // (WARDEN/CONDUCTOR evolved)
+      if (e.phase >= 3) {
+        const ga = angTo(player.x, player.y, e.x, e.y), gd = dist(player.x, player.y, e.x, e.y);
+        const lim3 = ARENA / 2 - player.r;
+        if (gd < ARCH_PULL_R && gd > player.r + e.r) {
+          player.x = clamp(player.x + Math.cos(ga) * ARCH_PULL * dt, -lim3, lim3);
+          player.y = clamp(player.y + Math.sin(ga) * ARCH_PULL * dt, -lim3, lim3);
+        }
+        d.grT = (d.grT ?? ARCH_GAPRING_CD) - dt;
+        if (d.grT <= 0) {
+          d.grT = ARCH_GAPRING_CD * F;
+          const gap = (Math.random() * ARCH_GAPRING_N) | 0;
+          for (let k = 0; k < ARCH_GAPRING_N; k++) {
+            if ((k - gap + ARCH_GAPRING_N) % ARCH_GAPRING_N < ARCH_GAPRING_GAP) continue;
+            const a = k / ARCH_GAPRING_N * TAU;
+            spawnEnemyProjectile(e.x, e.y, Math.cos(a) * ARCH_GAPRING_SPD, Math.sin(a) * ARCH_GAPRING_SPD, e.dmg * B_BULLET, YE, { r: 8 });
+          }
+        }
+        d.spA = (d.spA || 0) + dt * 1.1; d.spE = (d.spE ?? 0) - dt;
+        if (d.spE <= 0) {
+          d.spE = ARCH_SPIRAL_GAP * (e.phase >= 4 ? 0.8 : 1);
+          for (let arm = 0; arm < 2; arm++) {
+            const a = d.spA + arm * Math.PI;
+            spawnEnemyProjectile(e.x, e.y, Math.cos(a) * ARCH_SPIRAL_SPD, Math.sin(a) * ARCH_SPIRAL_SPD, e.dmg * B_BULLET, BL, { kind: 'curve', spin: 0.5, life: 4 });
+          }
+        }
+      }
+      // ERASE (final phase): telegraphed implosion novas on top of everything
+      if (e.phase >= 4) {
+        d.novaT = (d.novaT ?? ARCH_NOVA_CD) - dt;
+        if (d.novaT <= 0 && !(d.nova > 0)) {
+          d.nova = ARCH_NOVA_TELE; d.novaT = ARCH_NOVA_CD;
+          addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: ARCH_NOVA_R, dur: ARCH_NOVA_TELE, color: RD });
+        }
+        if (d.nova > 0) {
+          d.nova -= dt;
+          if (Math.random() < 0.6) {
+            const a = rand(0, TAU);
+            spawnParticle(e.x + Math.cos(a) * ARCH_NOVA_R, e.y + Math.sin(a) * ARCH_NOVA_R, -Math.cos(a) * 300, -Math.sin(a) * 300, 0.4, 3, RD, 'spark');
+          }
+          if (d.nova <= 0) {
+            explodeAt(e.x, e.y, ARCH_NOVA_R, RD);
+            if (dist(e.x, e.y, player.x, player.y) < ARCH_NOVA_R + player.r) hurtPlayer(e.dmg * B_NOVA);
+            bossRing(e, 48, 230, B_BULLET, rand(0, TAU), RD);
+          }
+        }
+      }
+    },
+    onPhase(e, ph) {
+      const names = ['SURVEY', 'REPLICATE', 'REWRITE', 'CONDUCT', 'ERASE'];
+      floater(e.x, e.y - e.r - 48, names[Math.min(ph, 4)], PU, 26);
+      bossRing(e, 30 + ph * 8, 210, B_BULLET, rand(0, TAU), [PU, MA, CY, YE, WH][ph % 5]);
+    },
+    draw(e) {
+      const d = e.data, t = G.time;
+      const nodesAlive = d.nodes ? d.nodes.some(n => !n.dead) : false;
+      // triple counter-rotating rune rings
+      const ringCols = [PU, MA, CY];
+      for (let ringI = 0; ringI < 3; ringI++) {
+        const rr = e.r * (1.25 + ringI * 0.33);
+        const base = t * (0.35 + ringI * 0.15) * (ringI % 2 ? -1 : 1);
+        ctx.strokeStyle = rgba(ringCols[ringI], 0.35); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(e.x, e.y, rr, 0, TAU); ctx.stroke();
+        const nGlyphs = 10 + ringI * 4;
+        for (let k = 0; k < nGlyphs; k++) {
+          const a = base + k / nGlyphs * TAU;
+          ctx.strokeStyle = rgba(ringCols[ringI], 0.8); ctx.lineWidth = 1.6;
+          poly(e.x + Math.cos(a) * rr, e.y + Math.sin(a) * rr, 5, 3 + (k % 3), a); ctx.stroke();
+        }
+      }
+      // geometric limbs: four slow-rotating blades
+      for (let k = 0; k < 4; k++) {
+        const a = t * 0.22 + k / 4 * TAU;
+        const x1 = e.x + Math.cos(a) * e.r * 0.7, y1 = e.y + Math.sin(a) * e.r * 0.7;
+        const x2 = e.x + Math.cos(a) * e.r * 1.18, y2 = e.y + Math.sin(a) * e.r * 1.18;
+        ctx.strokeStyle = rgba(WH, 0.65); ctx.lineWidth = 7;
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+        glow(x2, y2, 9, PU, 0.7);
+      }
+      // hexagram frame + inner counter-rotor
+      glow(e.x, e.y, e.r * 1.6, PU, 0.55);
+      ctx.fillStyle = rgba('#0a0620', 0.85); ctx.strokeStyle = rgba(WH, 0.95); ctx.lineWidth = 5;
+      star(e.x, e.y, e.r, 6, e.rot * 0.4, 0.72); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = rgba(MA, 0.8); ctx.lineWidth = 2.5;
+      poly(e.x, e.y, e.r * 0.62, 6, -e.rot * 0.8); ctx.stroke();
+      // the all-seeing eye: sclera + iris that tracks the player + dark pupil
+      const ea = angTo(e.x, e.y, player.x, player.y);
+      ctx.fillStyle = rgba(WH, 0.92);
+      ctx.beginPath(); ctx.ellipse(e.x, e.y, e.r * 0.42, e.r * 0.26, 0, 0, TAU); ctx.fill();
+      const ix = e.x + Math.cos(ea) * e.r * 0.13, iy = e.y + Math.sin(ea) * e.r * 0.08;
+      ctx.fillStyle = PU; ctx.beginPath(); ctx.arc(ix, iy, e.r * 0.13, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#05030f'; ctx.beginPath(); ctx.arc(ix, iy, e.r * 0.055, 0, TAU); ctx.fill();
+      glow(ix, iy, e.r * 0.2, MA, 0.8);
+      // shield shimmer while rune nodes survive
+      if (nodesAlive) {
+        ctx.strokeStyle = rgba(CY, 0.25 + 0.15 * Math.sin(t * 6)); ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(e.x, e.y, e.r * 1.08, 0, TAU); ctx.stroke();
+      }
     },
   },
 };
@@ -1719,6 +2565,25 @@ const EBEHAVIOR = {
   },
   boss: {
     move(e, c, dt) {
+      if (e.entrance > 0) {                  // materialization: hold position, no brain
+        e.entrance -= dt; c.sp = 0;
+        if (Math.random() < 0.6) {           // particles implode toward the forming body
+          const a = rand(0, TAU), rr = e.r * rand(2.0, 3.4);
+          spawnParticle(e.x + Math.cos(a) * rr, e.y + Math.sin(a) * rr, -Math.cos(a) * 260, -Math.sin(a) * 260, 0.35, 3, e.color, 'spark');
+        }
+        if (e.entrance <= 0) {               // arrival slam
+          G.shake = Math.min(1, G.shake + 0.5);
+          G.flash = Math.max(G.flash, 0.35); G.flashColor = e.color;
+          spawnRing(e.x, e.y, e.r, e.r * 5, 0.5, e.color);
+          sfx('boss');
+        }
+        return;
+      }
+      if (e.phasePause > 0) {                // phase-transition breather
+        e.phasePause -= dt; c.sp = 0;
+        tickBossZones(e, dt);                // telegraphed zones keep counting down
+        return;
+      }
       c.sp = (e.bdef && e.bdef.selfMove) ? 0 : e.speed;   // slow chase unless the def drives itself
       updateBoss(e, dt);
     },
@@ -1836,7 +2701,7 @@ const EBEHAVIOR = {
         e.intangible = PHANTOM_FADE + PHANTOM_POST;              // immune the instant it starts fading
       }
     },
-    contact(e, c) { if (e.intangible > 0) return; hurtPlayer(e.dmg); e.vx -= c.ax * 60; e.vy -= c.ay * 60; },
+    contact(e, c) { if (e.intangible > 0) return; hurtPlayer(e.dmg, e.x, e.y); e.vx -= c.ax * 60; e.vy -= c.ay * 60; },
   },
   // Detonator: a heavy bomber. Chases like a bomber; on contact or on death it
   // arms (accelerating blink telegraph) then erupts in 3 staggered rings.
@@ -1904,6 +2769,25 @@ const EBEHAVIOR = {
       }
     },
   },
+  // ARCHITECT rune node: locked in orbit around the super-boss; fires aimed
+  // triples. While any node lives the ARCHITECT's core is heavily shielded.
+  archnode: {
+    move(e, c, dt) {
+      const b = e.arch;
+      if (!b || b.dead) { killEnemy(e, false); return; }
+      e.orbA += dt * ARCH_NODE_SPIN;
+      e.x = b.x + Math.cos(e.orbA) * ARCH_NODE_ORBIT;
+      e.y = b.y + Math.sin(e.orbA) * ARCH_NODE_ORBIT;
+      e.vx = 0; e.vy = 0; c.sp = 0;
+      e.fireT -= dt;
+      if (e.fireT <= 0 && c.d < 900) {
+        e.fireT = ARCH_NODE_FIRE;
+        const a = angTo(e.x, e.y, player.x, player.y);
+        for (let s = -1; s <= 1; s++)
+          spawnEnemyProjectile(e.x, e.y, Math.cos(a + s * 0.14) * 260, Math.sin(a + s * 0.14) * 260, e.dmg, PU);
+      }
+    },
+  },
   // Saw: a fast buzzsaw that flies in a straight line, bouncing off the arena
   // walls. High contact damage; spins rapidly (rot handled in updateEnemies).
   saw: {
@@ -1925,6 +2809,7 @@ function updateEnemies(dt) {
     const e = arr[i];
     if (e.dead) { arr.splice(i, 1); if (e === G.boss) G.boss = null; continue; }
     e.flash = Math.max(0, e.flash - dt * 6);
+    if (e.spawn > 0) e.spawn -= dt;          // materialization timer (Section J)
     e.rot += dt * (e.type === 'orbiter' ? 4 : e.type === 'saw' ? 7 : 1);
 
     // frost slow
@@ -1939,12 +2824,13 @@ function updateEnemies(dt) {
     // per-type behaviour (default = chase). Boss dispatched by its flag.
     const beh = e.boss ? EBEHAVIOR.boss : EBEHAVIOR[e.type];
     if (beh && beh.move) beh.move(e, c, dt);
+    if (e.frenzy > 0) { e.frenzy -= dt; c.sp *= HIVE_FRENZY_MUL; }   // HIVE pheromone rush
 
     e.vx = lerp(e.vx, c.ax * c.sp, 0.12);
     e.vy = lerp(e.vy, c.ay * c.sp, 0.12);
 
-    // light separation so they don't fully stack
-    if (!e.boss) {
+    // light separation so they don't fully stack (noSep types are orbit-locked)
+    if (!e.boss && !e.noSep) {
       grid.query(e.x, e.y, e.r + 18, _q);
       let px = 0, py = 0, cnt = 0;
       for (let j = 0; j < _q.length; j++) {
@@ -1964,10 +2850,11 @@ function updateEnemies(dt) {
     const lim = ARENA / 2 - e.r;
     e.x = clamp(e.x, -lim, lim); e.y = clamp(e.y, -lim, lim);
 
-    // contact with player
-    if (c.d < e.r + player.r) {
+    // contact with player — never while still materializing (spawn-in fade /
+    // boss entrance): the body renders tiny and faint, so the hit would feel invisible
+    if (c.d < e.r + player.r && !(e.spawn > 0) && !(e.boss && e.entrance > 0)) {
       if (beh && beh.contact) beh.contact(e, c);
-      else { hurtPlayer(e.dmg); e.vx -= c.ax * 60; e.vy -= c.ay * 60; } // default knockback
+      else { hurtPlayer(e.dmg, e.x, e.y); e.vx -= c.ax * 60; e.vy -= c.ay * 60; } // default knockback
     }
   }
 }
@@ -2002,9 +2889,11 @@ function updateEnemyProjectiles(dt) {
       }
     }
     p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+    if (p.kind === 'home' && Math.random() < 0.35 * PERF.fxLevel)   // comet tail (Section J)
+      spawnParticle(p.x, p.y, 0, 0, 0.15, 3, p.color, 'spark');
     if (p.life <= 0 || dist2(p.x, p.y, player.x, player.y) > EBULLET_CULL * EBULLET_CULL) { arr.splice(i, 1); continue; }
     if (dist2(p.x, p.y, player.x, player.y) < (p.r + player.r) ** 2) {
-      hurtPlayer(p.dmg);
+      hurtPlayer(p.dmg, p.x - p.vx * 0.1, p.y - p.vy * 0.1);   // indicator points up the bullet's path
       arr.splice(i, 1);
     }
   }
@@ -2014,16 +2903,22 @@ function updateEnemyProjectiles(dt) {
    11. COMBAT RESOLUTION / PARTICLES / PICKUPS / XP
    ========================================================================= */
 function spawnParticle(x, y, vx, vy, life, r, color, kind) {
-  if (G.particles.length >= MAX_PARTICLES) G.particles.shift();
+  if (G.particles.length >= PERF.particleBudget) G.particles.shift();
   G.particles.push({ x, y, vx, vy, life, max: life, r, color, kind: kind || 'spark', drag: 0.92 });
+}
+// Expanding ring shockwave — same budget enforcement as spawnParticle (rings
+// pushed straight into G.particles would be exempt from PERF.particleBudget).
+function spawnRing(x, y, r, mr, life, color) {
+  if (G.particles.length >= PERF.particleBudget) G.particles.shift();
+  G.particles.push({ x, y, vx: 0, vy: 0, r, mr, life, max: life, color, kind: 'ring' });
 }
 function floater(x, y, text, color, size) {
   if (G.floaters.length >= 90) G.floaters.shift();
   G.floaters.push({ x, y, vy: -42, life: 0.8, max: 0.8, text, color, size: size || 14 });
 }
 function explodeAt(x, y, radius, color) {
-  G.particles.push({ x, y, vx: 0, vy: 0, r: 8, mr: radius, life: 0.4, max: 0.4, color, kind: 'ring' });
-  for (let i = 0; i < 16; i++) {
+  spawnRing(x, y, 8, radius, 0.4, color);
+  for (let i = 0, n = Math.max(6, Math.round(16 * PERF.fxLevel)); i < n; i++) {
     const a = rand(0, TAU), s = rand(60, 320);
     spawnParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(0.25, 0.55), rand(2, 5), color, 'spark');
   }
@@ -2037,6 +2932,7 @@ function damageEnemy(e, dmg, opts) {
   if (e.dead) return;
   if (e.intangible > 0) return;            // intangible (phantom blink) = takes no damage
   if (e.detonating) return;                // detonator mid-sequence is immune until it bursts
+  if (e.boss && e.entrance > 0) return;    // bosses are untouchable while materializing
   opts = opts || {};
   // Shielder: a frontal shield (faces the player) soaks most incoming projectile damage.
   if (e.type === 'shielder' && opts.proj && (opts.kbx || opts.kby)) {
@@ -2048,6 +2944,7 @@ function damageEnemy(e, dmg, opts) {
       spawnParticle(e.x + Math.cos(from) * e.r, e.y + Math.sin(from) * e.r, 0, 0, 0.2, 3, BL, 'spark');
     }
   }
+  if (e.shieldMul) dmg *= e.shieldMul;     // ARCHITECT core shield while nodes live
   let crit = false;
   if (Math.random() < S().crit) { crit = true; dmg *= S().critMult; }
   dmg = Math.round(dmg);
@@ -2071,23 +2968,48 @@ const DROP_BOMB_CHANCE   = 0.009;
 function killEnemy(e, reward) {
   if (e.dead) return;
   e.dead = true;
+  if (G.focusTarget === e) G.focusTarget = null;
   explodeAt(e.x, e.y, e.boss ? 200 : (e.elite ? 90 : 40), e.color);
   if (e.boss) {
     sfx('bigExplode'); G.hitstop = 0.12; G.flash = 0.5; G.flashColor = e.color;
+    G.nextBossAt = G.time + BOSS_FARM_WINDOW;   // open the next farming window
     if (Sound) { Sound.setIntensity(0.5); Sound.setMusicTempo(116); }
-    if (e.bdef) { spawnPickup(e.x, e.y, e.bdef.drop); spawnPickup(e.x + 44, e.y, 'heal'); } // exclusive drop + heal
+    if (e.bdef && e.bdef.id === 'architect') {
+      // THE achievement: cinematic death, legendary drop, permanent meta unlock
+      G.hitstop = 0.3; G.flash = 0.9; G.flashColor = WH; G.shake = 1;
+      for (let k = 0; k < 5; k++)
+        G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: 300 + k * 260, life: 0.7 + k * 0.12, max: 0.7 + k * 0.12, color: [WH, PU, MA, CY, YE][k], kind: 'ring' });
+      spawnPickup(e.x, e.y, 'ascendant');
+      for (const o of G.enemies) if (o.type === 'archnode' && !o.dead) killEnemy(o, false);
+      if (!META.architectSlain) { META.architectSlain = true; saveMeta(META); }
+      floater(e.x, e.y - e.r, 'THE ARCHITECT FALLS', WH, 26);
+    } else if (e.bdef) {
+      spawnPickup(e.x, e.y, e.bdef.drop); spawnPickup(e.x + 44, e.y, 'heal'); // exclusive drop + heal
+      // unique Glyph Fragment (one per boss per run) — fuel for the SIGIL
+      if (BOSS_IDS.includes(e.bdef.id) && !G.glyphs[e.bdef.id])
+        spawnPickup(e.x, e.y + 44, 'glyph', { glyphId: e.bdef.id });
+    }
   }
 
   if (reward !== false) {
     G.kills++;
+    G.dirKps += 1;                        // feeds the hidden clear-rate signal
     G.combo++; G.comboTimer = 2.6;
     const mult = 1 + Math.min(G.combo, 60) * 0.02;
     G.score += Math.floor((e.xp * 6 + e.r) * mult);
 
-    // gems
-    const gemN = e.boss ? 30 : (e.elite ? 6 : 1);
-    for (let i = 0; i < gemN; i++)
-      spawnGem(e.x + rand(-e.r, e.r), e.y + rand(-e.r, e.r), Math.max(1, Math.round(e.xp / (e.boss ? 1 : 1))));
+    // gems — a roster boss pays out ~BOSS_XP_LEVELS level-ups of XP (fixes the
+    // v1.5 ~20-levels-at-once dump); normals/elites are unchanged
+    if (e.boss) {
+      const eff = Math.max(0.25, S().xpGain * (player.buffT.nectar > 0 ? 2 : 1));
+      const gemV = Math.max(1, Math.round(xpForLevels(BOSS_XP_LEVELS) / eff / BOSS_GEM_COUNT));
+      for (let i = 0; i < BOSS_GEM_COUNT; i++)
+        spawnGem(e.x + rand(-e.r, e.r), e.y + rand(-e.r, e.r), gemV);
+    } else {
+      const gemN = e.elite ? 6 : 1;
+      for (let i = 0; i < gemN; i++)
+        spawnGem(e.x + rand(-e.r, e.r), e.y + rand(-e.r, e.r), Math.max(1, Math.round(e.xp)));
+    }
 
     // pickups (boss drops handled in the boss branch above)
     if (e.elite) spawnPickup(e.x, e.y, pick(['heal', 'magnet', 'bomb']));
@@ -2123,21 +3045,31 @@ function spawnGem(x, y, value) {
   }
   G.gems.push({ x, y, value, vx: rand(-40, 40), vy: rand(-40, 40), mag: false, t: 0 });
 }
-const PICKUP_COLOR = { heal: GR, magnet: BL, bomb: OR, prism: CY, nectar: GR, cleansave: MA, tempo: CY, singularity: PU };
-function spawnPickup(x, y, type) {
-  G.pickups.push({ x, y, type, t: 0, vy: 0 });
+const PICKUP_COLOR = { heal: GR, magnet: BL, bomb: OR, prism: CY, nectar: GR, cleansave: MA, tempo: CY, singularity: PU, glyph: YE, ascendant: WH };
+function spawnPickup(x, y, type, opts) {
+  const p = { x, y, type, t: 0, vy: 0 };
+  if (opts) Object.assign(p, opts);
+  G.pickups.push(p);
 }
 
+// magnetize every gem currently on screen (magnet/singularity pickups; the
+// nectar buff does the same continuously inside updateGems' main loop)
+function magnetizeVisibleGems() {
+  const os = viewRadius();
+  for (const g of G.gems) if (dist(g.x, g.y, player.x, player.y) <= os) g.mag = true;
+}
 function updateGems(dt) {
   const arr = G.gems;
   const pr = S().pickup;
-  // Queen's Nectar: continuously magnetize every on-screen gem while active.
-  if (player.buffT.nectar > 0) { const os = Math.hypot(W, H) / 2; for (const g of arr) if (dist(g.x, g.y, player.x, player.y) <= os) g.mag = true; }
+  // Queen's Nectar: continuously magnetize every on-screen gem while active
+  // (folded into the main loop — it already computes each gem's distance).
+  const nectarR = player.buffT.nectar > 0 ? viewRadius() : 0;
   for (let i = arr.length - 1; i >= 0; i--) {
     const g = arr[i];
     g.t += dt;
     g.vx *= 0.9; g.vy *= 0.9;
     const d = dist(g.x, g.y, player.x, player.y);
+    if (nectarR && d <= nectarR) g.mag = true;
     if (g.mag || d < pr) {
       const a = angTo(g.x, g.y, player.x, player.y);
       const pull = g.mag ? 720 : lerp(180, 620, 1 - d / pr);
@@ -2153,7 +3085,7 @@ function updatePickups(dt) {
     const p = arr[i];
     p.t += dt;
     if (dist(p.x, p.y, player.x, player.y) < player.r + 18) {
-      applyPickup(p.type);
+      applyPickup(p.type, p);
       arr.splice(i, 1);
     }
   }
@@ -2178,17 +3110,13 @@ function updateBuffs(dt) {
   }
 }
 const BUFF_TRIPLE_T = 12, BUFF_NECTAR_T = 12, BUFF_AURA_T = 10, CLEANSAVE_INVULN = 2.5, TEMPO_MUL = 1.08;
-function applyPickup(type) {
+function applyPickup(type, p) {
   if (type === 'heal') {
     player.hp = Math.min(player.maxHp, player.hp + player.maxHp * 0.3);
     floater(player.x, player.y - 24, '+HP', GR, 18); sfx('coin');
     for (let i = 0; i < 16; i++) spawnParticle(player.x, player.y, rand(-120, 120), rand(-120, 120), 0.5, 3, GR, 'spark');
   } else if (type === 'magnet') {
-    // Only magnetize gems that are currently on-screen. The world renders 1:1
-    // centered on the camera, and Math.hypot(W,H)/2 is exactly the off-screen
-    // spawn ring, so it equals the visible edge. Off-screen gems are left alone.
-    const onScreen = Math.hypot(W, H) / 2;
-    for (const g of G.gems) if (dist(g.x, g.y, player.x, player.y) <= onScreen) g.mag = true;
+    magnetizeVisibleGems();                  // on-screen gems only; off-screen are left alone
     floater(player.x, player.y - 24, 'MAGNET', BL, 18); sfx('coin');
   } else if (type === 'bomb') {
     sfx('bigExplode'); G.shake = 1; G.flash = 0.6; G.flashColor = OR; G.hitstop = 0.08;
@@ -2197,6 +3125,7 @@ function applyPickup(type) {
     // (no gems, no pickups, no splitter children) via killEnemy(e, false).
     for (const e of G.enemies.slice()) { if (e.boss) continue; killEnemy(e, false); }
     G.eProj.length = 0;
+    G.spawnRamp = 0;                      // director re-ramps over BOMB_RAMP_TIME, no snap-back
     floater(player.x, player.y - 24, 'BOOM', OR, 22);
   } else if (type === 'prism') {            // Prism Shard — triple-fire
     player.buffT.triple = BUFF_TRIPLE_T;
@@ -2215,11 +3144,41 @@ function applyPickup(type) {
     floater(player.x, player.y - 24, 'TEMPO+', CY, 18); sfx('coin');
     for (let i = 0; i < 12; i++) spawnParticle(player.x, player.y, rand(-110, 110), rand(-110, 110), 0.45, 3, CY, 'spark');
   } else if (type === 'singularity') {      // Singularity Fragment — magnetize all + damage aura
-    const os = Math.hypot(W, H) / 2; for (const g of G.gems) if (dist(g.x, g.y, player.x, player.y) <= os) g.mag = true;
+    magnetizeVisibleGems();
     player.buffT.aura = BUFF_AURA_T; player.buffT.auraTick = 0;
     floater(player.x, player.y - 24, 'SINGULARITY', PU, 18); sfx('coin');
     for (let i = 0; i < 16; i++) spawnParticle(player.x, player.y, rand(-130, 130), rand(-130, 130), 0.6, 3, PU, 'spark');
+  } else if (type === 'glyph') {            // ARCHITECT Glyph Fragment (Section D)
+    if (p && p.glyphId) G.glyphs[p.glyphId] = true;
+    const n = Object.keys(G.glyphs).length;
+    G.glyphCount = n;                        // cached for the per-frame HUD draw
+    floater(player.x, player.y - 24, 'GLYPH ' + n + '/' + BOSS_IDS.length, YE, 18); sfx('coin');
+    for (let i = 0; i < 14; i++) spawnParticle(player.x, player.y, rand(-120, 120), rand(-120, 120), 0.5, 3, YE, 'spark');
+    if (n >= BOSS_IDS.length && G.sigil === 0) {
+      G.sigil = 1;
+      G.bossBanner = { name: 'THE SIGIL IS FORGED', life: 3.0, max: 3.0 };
+      floater(player.x, player.y - 48, IS_TOUCH ? 'TAP THE SIGIL TO SUMMON' : 'PRESS G TO SUMMON', WH, 14);
+      sfx('levelup');
+    }
+  } else if (type === 'ascendant') {        // legendary: the Ascendant Core
+    player.stats.damageMul *= ASCENDANT_DMG;
+    player.stats.attackSpeedMul *= ASCENDANT_AS;
+    player.hp = player.maxHp;
+    player.invuln = Math.max(player.invuln, ASCENDANT_INVULN);
+    floater(player.x, player.y - 24, 'ASCENDANT CORE', WH, 22); sfx('levelup');
+    for (let i = 0; i < 40; i++) {
+      const a = rand(0, TAU);
+      spawnParticle(player.x, player.y, Math.cos(a) * rand(80, 380), Math.sin(a) * rand(80, 380), rand(0.5, 1.0), rand(2, 5), pick([WH, PU, CY, MA]), 'spark');
+    }
   }
+}
+
+// Total XP needed to carry the player through their next n level-ups (mirrors
+// the xpNext curve in addXp). Used to size boss XP payouts.
+function xpForLevels(n) {
+  let total = Math.max(0, player.xpNext - player.xp), lvl = player.level;
+  for (let i = 1; i < n; i++) { lvl++; total += Math.floor(6 + lvl * 4 + Math.pow(lvl, 1.55)); }
+  return Math.max(1, total);
 }
 
 function addXp(v) {
@@ -2231,6 +3190,10 @@ function addXp(v) {
     G.pendingLevels++;
     sfx('levelup');
     player.hp = Math.min(player.maxHp, player.hp + 8);
+    // level-up flourish (Section J): golden double ring + floater
+    G.particles.push({ x: player.x, y: player.y, vx: 0, vy: 0, r: player.r, mr: 130, life: 0.5, max: 0.5, color: YE, kind: 'ring' });
+    G.particles.push({ x: player.x, y: player.y, vx: 0, vy: 0, r: player.r, mr: 200, life: 0.65, max: 0.65, color: WH, kind: 'ring' });
+    floater(player.x, player.y - 30, 'LEVEL UP', YE, 18);
     for (let i = 0; i < 26; i++) { const a = rand(0, TAU); spawnParticle(player.x, player.y, Math.cos(a) * rand(60, 260), Math.sin(a) * rand(60, 260), rand(0.4, 0.8), rand(2, 4), YE, 'spark'); }
   }
 }
@@ -2290,7 +3253,7 @@ function updateProjectiles(dt) {
     }
 
     p.x += p.vx * dt; p.y += p.vy * dt;
-    if (p.trail && Math.random() < 0.6) spawnParticle(p.x, p.y, 0, 0, 0.18, p.r * 0.7, p.color, 'spark');
+    if (p.trail && Math.random() < 0.6 * PERF.fxLevel) spawnParticle(p.x, p.y, 0, 0, 0.18, p.r * 0.7, p.color, 'spark');
 
     // flak shells & vortex orbs deal no contact damage; their effect is on a timer
     if (p.kind !== 'flak' && p.kind !== 'vortex') {
@@ -2342,6 +3305,7 @@ function updateParticles(dt) {
   for (let i = G.beams.length - 1; i >= 0; i--) { if ((G.beams[i].life -= dt) <= 0) G.beams.splice(i, 1); }
   for (let i = G.arcs.length - 1; i >= 0; i--) { if ((G.arcs[i].life -= dt) <= 0) G.arcs.splice(i, 1); }
   for (let i = G.telegraphs.length - 1; i >= 0; i--) { if ((G.telegraphs[i].life -= dt) <= 0) G.telegraphs.splice(i, 1); }
+  for (let i = G.trail.length - 1; i >= 0; i--) { if ((G.trail[i].life -= dt) <= 0) G.trail.splice(i, 1); }
 }
 
 /* ===========================================================================
@@ -2354,6 +3318,24 @@ function update(dt) {
 
   G.time += dt;
   G.frost = null;
+
+  // enemy-level unlock marker (Section E)
+  if (G.lvUnlockAt === null && (G.bossTier >= ENEMY_LV_START_TIER || G.time >= ENEMY_LV_START_TIME))
+    G.lvUnlockAt = G.time;
+
+  // bomb aftermath: spawn pressure climbs back progressively, never snaps
+  if (G.spawnRamp < 1) G.spawnRamp = Math.min(1, G.spawnRamp + dt / BOMB_RAMP_TIME);
+
+  // ARCHITECT summoning ritual: rumble + matter streaming into the portal
+  if (G.ritual) {
+    G.ritual.t -= dt;
+    G.shake = Math.min(1, G.shake + dt * 0.25);
+    if (Math.random() < 0.7) {
+      const a = rand(0, TAU), rr = rand(200, 480);
+      spawnParticle(Math.cos(a) * rr, Math.sin(a) * rr, -Math.cos(a) * 320, -Math.sin(a) * 320, 0.5, 3, pick([PU, MA, CY]), 'spark');
+    }
+    if (G.ritual.t <= 0) { G.ritual = null; spawnArchitect(); }
+  }
 
   // spawn waves / bosses
   director(dt);
@@ -2368,25 +3350,39 @@ function update(dt) {
   const speed = BASE_SPEED * S().moveSpeedMul;
   if (player.dashTime > 0) {
     player.dashTime -= dt;
-    player.vx = player.dashDir.x * speed * 4.2;
-    player.vy = player.dashDir.y * speed * 4.2;
+    player.vx = player.dashDir.x * speed * DASH_SPEED_MUL;
+    player.vy = player.dashDir.y * speed * DASH_SPEED_MUL;
     if (Math.random() < 0.8) spawnParticle(player.x, player.y, rand(-30, 30), rand(-30, 30), 0.25, 3, CY, 'spark');
+    G.trail.push({ x: player.x, y: player.y, aim: player.aim, life: DASH_TRAIL_LIFE, max: DASH_TRAIL_LIFE });
+    if (player.dashTime <= 0) {                 // momentum carries out of the dash
+      player.vx = player.dashDir.x * speed * DASH_SPEED_MUL * DASH_VEL_CARRY;
+      player.vy = player.dashDir.y * speed * DASH_SPEED_MUL * DASH_VEL_CARRY;
+    }
   } else {
     const ms = speed * G.playerSlow;            // disruptor fields drag this below 1
-    player.vx = lerp(player.vx, mv.x * ms * mv.mag, 0.2);
-    player.vy = lerp(player.vy, mv.y * ms * mv.mag, 0.2);
+    // quick turn-response (Section F): steer harder the more the input opposes
+    // current velocity — direction changes feel snappy, never ice-skating
+    let resp = MOVE_LERP;
+    const cv = Math.hypot(player.vx, player.vy);
+    if (cv > 40 && mv.mag > 0) {
+      const dot = (player.vx * mv.x + player.vy * mv.y) / cv;
+      if (dot < 0.5) resp = Math.min(1, MOVE_LERP * (1 + TURN_ASSIST * (0.5 - dot)));
+    }
+    player.vx = lerp(player.vx, mv.x * ms * mv.mag, resp);
+    player.vy = lerp(player.vy, mv.y * ms * mv.mag, resp);
   }
   player.x += player.vx * dt; player.y += player.vy * dt;
   const lim = ARENA / 2 - player.r;
   player.x = clamp(player.x, -lim, lim); player.y = clamp(player.y, -lim, lim);
   G.playerSlow = 1;                             // reset; disruptors re-apply during updateEnemies
+  const spd = Math.hypot(player.vx, player.vy);
 
   // aim toward movement or nearest enemy
-  if (Math.hypot(player.vx, player.vy) > 30) player.aim = Math.atan2(player.vy, player.vx);
+  if (spd > 30) player.aim = Math.atan2(player.vy, player.vx);
   else { const t = nearestEnemy(player.x, player.y); if (t) player.aim = angTo(player.x, player.y, t.x, t.y); }
 
-  // thruster particles
-  if (Math.hypot(player.vx, player.vy) > 40 && Math.random() < 0.7) {
+  // thruster particles (budget-aware)
+  if (spd > 40 && Math.random() < 0.7 * PERF.fxLevel) {
     const a = Math.atan2(player.vy, player.vx) + Math.PI;
     spawnParticle(player.x + Math.cos(a) * 10, player.y + Math.sin(a) * 10, Math.cos(a) * rand(30, 90) + rand(-20, 20), Math.sin(a) * rand(30, 90) + rand(-20, 20), rand(0.2, 0.4), rand(1.5, 3), CY, 'spark');
   }
@@ -2409,12 +3405,16 @@ function update(dt) {
   updatePickups(dt);
   updateParticles(dt);
 
-  // camera + shake decay
-  G.cam.x = lerp(G.cam.x, player.x, 0.12);
-  G.cam.y = lerp(G.cam.y, player.y, 0.12);
+  // camera + shake decay (smooth lerp, dash punch-in)
+  G.cam.x = lerp(G.cam.x, player.x, CAM_LERP);
+  G.cam.y = lerp(G.cam.y, player.y, CAM_LERP);
+  G.dashZoom = lerp(G.dashZoom, player.dashTime > 0 ? DASH_ZOOM : 0, Math.min(1, 12 * dt));
   G.shake = Math.max(0, G.shake - dt * 1.6);
   if (G.flash > 0) G.flash = Math.max(0, G.flash - dt * 2.4);
   if (G.glitchFX > 0) G.glitchFX = Math.max(0, G.glitchFX - dt * 1.5);
+  if (G.bossBanner && (G.bossBanner.life -= dt) <= 0) G.bossBanner = null;
+  if (G.dmgDir && (G.dmgDir.t -= dt) <= 0) G.dmgDir = null;
+  if (!META.firstRunDone && G.time >= FIRST_RUN_HINT_T) { META.firstRunDone = true; saveMeta(META); }
 
   // music intensity ramps with on-screen pressure + time
   if (Sound) Sound.setIntensity(clamp(G.enemies.length / 120 + G.time / 600 + (G.boss ? 0.5 : 0), 0, 1));
@@ -2468,13 +3468,17 @@ function worldTransform() {
   let sx = 0, sy = 0;
   if (G.shake > 0) { const t = G.shake * G.shake * 16; sx = rand(-t, t); sy = rand(-t, t); }
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  ctx.translate(W / 2 - G.cam.x + sx, H / 2 - G.cam.y + sy);
+  ctx.translate(W / 2, H / 2);
+  const z = effZoom();                    // dash punch-in × mobile zoom-out
+  ctx.scale(z, z);
+  ctx.translate(-G.cam.x + sx, -G.cam.y + sy);
 }
 
 function drawGrid() {
   const step = 80;
-  const x0 = G.cam.x - W / 2 - step, x1 = G.cam.x + W / 2 + step;
-  const y0 = G.cam.y - H / 2 - step, y1 = G.cam.y + H / 2 + step;
+  const vw = W / camZoom, vh = H / camZoom;   // zoomed-out view sees more world
+  const x0 = G.cam.x - vw / 2 - step, x1 = G.cam.x + vw / 2 + step;
+  const y0 = G.cam.y - vh / 2 - step, y1 = G.cam.y + vh / 2 + step;
   ctx.lineWidth = 1;
   ctx.strokeStyle = rgba(CY, 0.05);
   ctx.beginPath();
@@ -2493,8 +3497,8 @@ function drawGrid() {
   ctx.globalCompositeOperation = 'source-over';
 }
 
-function drawShapeFor(e) {
-  const r = e.r;
+function drawShapeFor(e, rs) {
+  const r = e.r * (rs || 1);
   switch (e.shape) {
     case 'diamond': poly(e.x, e.y, r, 4, e.rot); break;
     case 'tri':     poly(e.x, e.y, r, 3, e.rot); break;
@@ -2522,17 +3526,40 @@ function render() {
     ctx.globalCompositeOperation = 'source-over';
   }
 
+  // ARCHITECT summoning portal at the arena center (Section D)
+  if (G.ritual) {
+    const k = 1 - G.ritual.t / ARCH_RITUAL;            // 0 -> 1 as it tears open
+    const R = 60 + 200 * k;
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 3; i++) {
+      ctx.strokeStyle = rgba([PU, MA, CY][i], 0.5); ctx.lineWidth = 3;
+      const a0 = G.time * (2 + i);
+      ctx.beginPath(); ctx.arc(0, 0, R * (0.6 + i * 0.25), a0, a0 + 4.2); ctx.stroke();
+    }
+    glow(0, 0, R, PU, 0.35 + 0.25 * Math.sin(G.time * 7));
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = rgba('#05030f', 0.5 + 0.4 * k);    // the void behind the swarm
+    ctx.beginPath(); ctx.arc(0, 0, R * 0.55, 0, TAU); ctx.fill();
+  }
+
   /* ---- additive GLOW pass ---- */
   ctx.globalCompositeOperation = 'lighter';
 
-  // gems
-  for (const g of G.gems) glow(g.x, g.y, 7, GR, 0.8);
-  // pickups
-  for (const p of G.pickups) { const c = PICKUP_COLOR[p.type] || WH; glow(p.x, p.y, 16 + Math.sin(p.t * 6) * 3, c, 0.9); }
+  // gems (glow pass thins out on weak devices; the crisp body pass never does)
+  for (let i = 0; i < G.gems.length; i++) {
+    if (PERF.fxLevel < 0.6 && (i & 1)) continue;
+    const g = G.gems[i];
+    glow(g.x, g.y, 7, GR, 0.8);
+  }
+  // pickups (gentle bob + pulsing glow)
+  for (const p of G.pickups) { const c = PICKUP_COLOR[p.type] || WH; glow(p.x, p.y + Math.sin(p.t * 3) * 3, 16 + Math.sin(p.t * 6) * 3, c, 0.9); }
   // enemy projectiles
   for (const p of G.eProj) glow(p.x, p.y, p.r * 2.2, p.color, p.arm > 0 ? 0.3 : 0.9);
-  // enemy glows
-  for (const e of G.enemies) glow(e.x, e.y, e.r * (e.boss ? 2.2 : 1.9), e.flash > 0.3 ? WH : e.color, e.boss ? 0.8 : 0.6);
+  // enemy glows (spawn-in: glow swells with the materializing body)
+  for (const e of G.enemies) {
+    const sk = e.spawn > 0 ? 1 - clamp(e.spawn / ENEMY_SPAWNIN_T, 0, 1) : 1;
+    glow(e.x, e.y, e.r * (e.boss ? 2.2 : 1.9) * (0.5 + 0.5 * sk), e.flash > 0.3 ? WH : e.color, (e.boss ? 0.8 : 0.6) * (0.3 + 0.7 * sk));
+  }
   // player projectiles
   for (const p of G.pProj) glow(p.x, p.y, p.r * 2.6, p.color, 0.95);
   // weapon-specific glows (orbital blades)
@@ -2599,9 +3626,10 @@ function render() {
   // pickups: hex badge + vector glyph (no fonts -> crisp everywhere)
   for (const p of G.pickups) {
     const c = PICKUP_COLOR[p.type] || WH;
+    const bobY = p.y + Math.sin(p.t * 3) * 3;
     ctx.fillStyle = rgba(c, 0.18); ctx.strokeStyle = c; ctx.lineWidth = 2;
-    poly(p.x, p.y, 13, 6, p.t * 2); ctx.fill(); ctx.stroke();
-    ctx.save(); ctx.translate(p.x, p.y); ctx.strokeStyle = WH; ctx.fillStyle = WH; ctx.lineWidth = 2.4; ctx.lineCap = 'round';
+    poly(p.x, bobY, 13, 6, p.t * 2); ctx.fill(); ctx.stroke();
+    ctx.save(); ctx.translate(p.x, bobY); ctx.strokeStyle = WH; ctx.fillStyle = WH; ctx.lineWidth = 2.4; ctx.lineCap = 'round';
     if (p.type === 'heal') {                 // plus
       ctx.beginPath(); ctx.moveTo(-5, 0); ctx.lineTo(5, 0); ctx.moveTo(0, -5); ctx.lineTo(0, 5); ctx.stroke();
     } else if (p.type === 'magnet') {        // horseshoe magnet
@@ -2620,6 +3648,12 @@ function render() {
     } else if (p.type === 'singularity') {   // ring + core
       ctx.beginPath(); ctx.arc(0, 0, 5, 0, TAU); ctx.stroke();
       ctx.beginPath(); ctx.arc(0, 0, 2, 0, TAU); ctx.fill();
+    } else if (p.type === 'glyph') {         // rune shard (diamond + dot)
+      poly(0, 0, 6, 4, Math.PI / 4); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, 1.8, 0, TAU); ctx.fill();
+    } else if (p.type === 'ascendant') {     // radiant core
+      star(0, 0, 7, 5, p.t * 2, 0.45); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, 2, 0, TAU); ctx.fill();
     }
     ctx.restore();
   }
@@ -2627,27 +3661,63 @@ function render() {
   for (const g of G.gems) { ctx.fillStyle = GR; poly(g.x, g.y, 4.5, 4, G.time * 3); ctx.fill(); }
   // enemies
   for (const e of G.enemies) {
-    if (e.boss && e.bdef) { e.bdef.draw(e); continue; }   // bosses render their own procedural body
+    if (e.boss && e.bdef) {                                // bosses render their own procedural body
+      if (e.entrance > 0) {                                // materialization: scale + fade in
+        const k = clamp(1 - e.entrance / BOSS_ENTRANCE_T, 0, 1);
+        const s = 0.25 + 0.75 * (1 - (1 - k) * (1 - k));   // ease-out
+        ctx.save(); ctx.globalAlpha = 0.15 + 0.85 * k;
+        ctx.translate(e.x, e.y); ctx.scale(s, s); ctx.translate(-e.x, -e.y);
+        e.bdef.draw(e); ctx.restore();
+        ctx.strokeStyle = rgba(e.color, 0.18 + 0.5 * (1 - k));   // summoning sigil
+        ctx.lineWidth = 2;
+        poly(e.x, e.y, e.r * (2.6 - 1.2 * k), 6, G.time * 1.7); ctx.stroke();
+        poly(e.x, e.y, e.r * (2.0 - 0.8 * k), 3, -G.time * 2.3); ctx.stroke();
+        continue;
+      }
+      e.bdef.draw(e); continue;
+    }
     const phasing = e.type === 'phantom' && e.intangible > 0;
-    if (phasing) ctx.globalAlpha = (e.phState === 'fade') ? clamp(0.25 + 0.7 * (e.ghostA ?? 1), 0.25, 1) : 0.3; // fade-out telegraph, then ghostly
+    // spawn-in (Section J): bodies scale and fade in instead of popping
+    const spawnK = e.spawn > 0 ? 1 - clamp(e.spawn / ENEMY_SPAWNIN_T, 0, 1) : 1;
+    const scaleK = spawnK < 1 ? 0.3 + 0.7 * spawnK : 1;
+    let alpha = 1;
+    if (phasing) alpha = (e.phState === 'fade') ? clamp(0.25 + 0.7 * (e.ghostA ?? 1), 0.25, 1) : 0.3; // fade-out telegraph, then ghostly
+    if (spawnK < 1) alpha *= 0.25 + 0.75 * spawnK;
+    if (alpha < 1) ctx.globalAlpha = alpha;
     ctx.lineWidth = e.boss ? 4 : (e.type === 'juggernaut' ? 3.2 : 2.2);
     ctx.strokeStyle = e.flash > 0.3 ? WH : e.color;
     ctx.fillStyle = e.flash > 0.5 ? rgba(WH, 0.8) : rgba(e.color, e.slow < 1 ? 0.45 : 0.22);
-    drawShapeFor(e); ctx.fill(); ctx.stroke();
-    if (e.slow < 1) { ctx.strokeStyle = rgba('#bff', 0.6); ctx.lineWidth = 1; drawShapeFor(e); ctx.stroke(); }
+    drawShapeFor(e, scaleK); ctx.fill(); ctx.stroke();
+    if (e.slow < 1) { ctx.strokeStyle = rgba('#bff', 0.6); ctx.lineWidth = 1; drawShapeFor(e, scaleK); ctx.stroke(); }
     // shielder: bright frontal shield arc facing the player
     if (e.type === 'shielder') {
       const sa = e.shieldA ?? angTo(e.x, e.y, player.x, player.y);
       ctx.strokeStyle = rgba(BL, 0.9); ctx.lineWidth = 3.5;
       ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 5, sa - SHIELDER_ARC, sa + SHIELDER_ARC); ctx.stroke();
     }
-    if (phasing) ctx.globalAlpha = 1;
+    if (alpha < 1) ctx.globalAlpha = 1;
     // boss / elite / juggernaut health bar
     if (e.boss) { /* drawn in HUD */ }
     else if (e.elite || e.type === 'juggernaut' || (e.maxHp > 60 && e.hp < e.maxHp)) {
       const w = e.r * 2;
       ctx.fillStyle = rgba('#000', 0.5); ctx.fillRect(e.x - w / 2, e.y - e.r - 8, w, 3);
       ctx.fillStyle = e.color; ctx.fillRect(e.x - w / 2, e.y - e.r - 8, w * clamp(e.hp / e.maxHp, 0, 1), 3);
+    }
+    // focus reticle (Section H): four rotating arcs around the focused creature
+    if (G.focusTarget === e) {
+      const rr = e.r + 10 + 2 * Math.sin(G.time * 6);
+      ctx.strokeStyle = rgba(WH, 0.75); ctx.lineWidth = 1.5;
+      for (let k = 0; k < 4; k++) {
+        const a = G.time * 1.5 + k / 4 * TAU;
+        ctx.beginPath(); ctx.arc(e.x, e.y, rr, a, a + 0.7); ctx.stroke();
+      }
+    }
+    // level badge (Section E): only when meaningfully leveled
+    if (e.lv > 1) {
+      ctx.font = LV_BADGE_FONT;            // counter-scaled so it's readable under camZoom
+      ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = rgba(YE, 0.85);
+      ctx.fillText('Lv ' + e.lv, e.x, e.y - e.r - 12);
     }
   }
   // enemy projectiles core
@@ -2665,6 +3735,20 @@ function render() {
     else if (p.kind === 'vortex') { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(G.time * 6); ctx.strokeStyle = PU; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, p.r * 0.6, 0, Math.PI * 1.5); ctx.stroke(); ctx.restore(); }
     else if (p.kind === 'flak') { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(G.time * 8); ctx.fillStyle = YE; star(0, 0, p.r, 4, 0, 0.5); ctx.fill(); ctx.restore(); }
     else { ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.55, 0, TAU); ctx.fill(); }
+  }
+  // dash motion trail (Section F): ghost ships fading behind the dash
+  if (G.trail.length) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const g of G.trail) {
+      const a = clamp(g.life / g.max, 0, 1) * 0.5;
+      ctx.save(); ctx.translate(g.x, g.y); ctx.rotate(g.aim); ctx.globalAlpha = a;
+      ctx.fillStyle = rgba(CY, 0.8);
+      ctx.beginPath(); ctx.moveTo(16, 0); ctx.lineTo(-11, 10); ctx.lineTo(-6, 0); ctx.lineTo(-11, -10);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
   }
   // player ship
   if (G.state === 'playing' || G.state === 'paused' || G.state === 'levelup') drawPlayer();
@@ -2688,9 +3772,19 @@ function render() {
 function drawPlayer() {
   const blink = player.invuln > 0 && Math.floor(G.time * 20) % 2 === 0;
   if (blink) return;
+  const spd = Math.hypot(player.vx, player.vy);
   ctx.save();
   ctx.translate(player.x, player.y);
   ctx.rotate(player.aim);
+  // animated thruster flame (Section J): grows with speed, white-hot in a dash
+  const flame = clamp(spd / (BASE_SPEED * 2), 0, 1);
+  if (flame > 0.05) {
+    const fl = 8 + 18 * flame + Math.sin(G.time * 40) * 3;
+    ctx.fillStyle = rgba(player.dashTime > 0 ? WH : OR, 0.85);
+    ctx.beginPath(); ctx.moveTo(-8, 4.5); ctx.lineTo(-8 - fl, 0); ctx.lineTo(-8, -4.5); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = rgba(YE, 0.9);
+    ctx.beginPath(); ctx.moveTo(-8, 2.5); ctx.lineTo(-8 - fl * 0.55, 0); ctx.lineTo(-8, -2.5); ctx.closePath(); ctx.fill();
+  }
   ctx.shadowColor = CY; ctx.shadowBlur = 18;
   ctx.fillStyle = rgba(CY, 0.9); ctx.strokeStyle = WH; ctx.lineWidth = 2;
   ctx.beginPath();
@@ -2698,10 +3792,16 @@ function drawPlayer() {
   ctx.closePath(); ctx.fill(); ctx.stroke();
   ctx.shadowBlur = 0;
   ctx.restore();
+  // idle shimmer (Section J): a soft rotating tri-halo while hovering
+  if (spd < 30) {
+    const sh = 0.5 + 0.5 * Math.sin(G.time * 2.4);
+    ctx.strokeStyle = rgba(CY, 0.2 + 0.25 * sh); ctx.lineWidth = 1.5;
+    poly(player.x, player.y, player.r + 5 + sh * 2, 3, player.aim + G.time * 0.8); ctx.stroke();
+  }
   // dash cooldown ring
   if (player.dashCD > 0) {
     ctx.strokeStyle = rgba(CY, 0.5); ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(player.x, player.y, player.r + 8, -Math.PI / 2, -Math.PI / 2 + (1 - player.dashCD / 1.5) * TAU); ctx.stroke();
+    ctx.beginPath(); ctx.arc(player.x, player.y, player.r + 8, -Math.PI / 2, -Math.PI / 2 + (1 - player.dashCD / DASH_CD) * TAU); ctx.stroke();
   } else {
     ctx.strokeStyle = rgba(YE, 0.7); ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(player.x, player.y, player.r + 8, 0, TAU); ctx.stroke();
@@ -2784,6 +3884,24 @@ function drawHUD() {
     ctx.textBaseline = 'alphabetic';
   }
 
+  // boss incoming banner (high-contrast warning, slides in + pulses)
+  if (G.bossBanner) {
+    const bb = G.bossBanner, a = clamp(bb.life / bb.max, 0, 1);
+    const slide = Math.min(1, (bb.max - bb.life) * 5);
+    ctx.fillStyle = rgba('#000', 0.5 * a * slide);
+    ctx.fillRect(0, H * 0.30 - 34, W, 68);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = '900 34px Segoe UI, sans-serif';
+    ctx.fillStyle = rgba(RD, (0.7 + 0.3 * Math.sin(G.time * 12)) * a * slide);
+    ctx.fillText('⚠ ' + bb.name + ' ⚠', W / 2, H * 0.30 - 8);
+    if (bb.sub) {   // only duel banners carry the subtitle (not SIGIL/ritual events)
+      ctx.font = '700 13px Segoe UI, sans-serif';
+      ctx.fillStyle = rgba(WH, 0.85 * a * slide);
+      ctx.fillText(bb.sub, W / 2, H * 0.30 + 22);
+    }
+    ctx.textBaseline = 'alphabetic';
+  }
+
   // boss bar + phase pips
   if (G.boss) {
     const b = G.boss, bw = Math.min(560, W - 40), bx = (W - bw) / 2, by = 78, bh = 14;
@@ -2796,12 +3914,58 @@ function drawHUD() {
     for (let i = 0; i < nph; i++) { const px = bx + bw - 8 - i * 16, py = by + bh + 8; ctx.fillStyle = (i < b.phase) ? (b.color || MA) : rgba(WH, 0.2); ctx.beginPath(); ctx.arc(px, py, 4, 0, TAU); ctx.fill(); }
   }
 
+  // directional damage indicator (Section L): a red arc toward the hit source
+  if (G.dmgDir) {
+    const k = clamp(G.dmgDir.t / DMG_IND_T, 0, 1);
+    const rr = Math.min(W, H) * 0.32;
+    ctx.strokeStyle = rgba(RD, 0.7 * k); ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(W / 2, H / 2, rr, G.dmgDir.a - 0.35, G.dmgDir.a + 0.35); ctx.stroke();
+  }
+
+  // first-run hint (Section L): one line, fades after the opening seconds
+  if (!META.firstRunDone && G.time < FIRST_RUN_HINT_T) {
+    const a2 = clamp(Math.min(G.time, FIRST_RUN_HINT_T - G.time), 0, 1);
+    ctx.font = '700 14px Segoe UI, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = rgba(WH, 0.75 * a2);
+    ctx.fillText(IS_TOUCH
+      ? 'Drag to move · double-tap or » to dash · dodge the bright telegraphs'
+      : 'WASD to move · Space to dash · dodge the bright telegraphs', W / 2, H - 86);
+  }
+
   // low HP vignette
   if (player.hp / player.maxHp < 0.3) {
     const pulse = 0.25 + 0.15 * Math.sin(G.time * 6);
     const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.7);
     v.addColorStop(0, 'rgba(255,40,60,0)'); v.addColorStop(1, `rgba(255,30,50,${pulse})`);
     ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+  }
+
+  // SIGIL inventory slot (Section D) — appears once the first glyph drops
+  {
+    const glyphN = G.glyphCount;
+    if (glyphN > 0 && G.sigil < 2) {
+      const sx = W - 56, sy = H - (IS_TOUCH ? 148 : 72);
+      if (G.sigilUI) { G.sigilUI.x = sx; G.sigilUI.y = sy; }
+      else G.sigilUI = { x: sx, y: sy, r: 26 };
+      const forged = G.sigil === 1;
+      const pulse = forged ? 0.75 + 0.25 * Math.sin(G.time * 5) : 0.45;
+      ctx.fillStyle = rgba(PU, forged ? 0.30 : 0.10);
+      ctx.strokeStyle = rgba(forged ? PU : WH, pulse); ctx.lineWidth = 2;
+      poly(sx, sy, 24, 6, forged ? G.time * 1.2 : 0.2); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = forged ? WH : rgba(WH, 0.6); ctx.lineWidth = 2;
+      star(sx, sy, 9, 4, G.time * 0.4, 0.5); ctx.stroke();
+      for (let i = 0; i < BOSS_IDS.length; i++) {       // glyph progress pips
+        const a = -Math.PI / 2 + i / BOSS_IDS.length * TAU;
+        ctx.fillStyle = i < glyphN ? YE : rgba(WH, 0.18);
+        ctx.beginPath(); ctx.arc(sx + Math.cos(a) * 31, sy + Math.sin(a) * 31, 3, 0, TAU); ctx.fill();
+      }
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = rgba(WH, forged ? 0.8 : 0.5);
+      ctx.font = '700 10px Segoe UI, sans-serif';
+      ctx.fillText(forged ? (IS_TOUCH ? 'SUMMON' : 'G — SUMMON') : glyphN + '/' + BOSS_IDS.length, sx, sy + 42);
+      ctx.textBaseline = 'alphabetic';
+    } else G.sigilUI = null;
   }
 
   // GLITCH boss screen overlay (cheap channel-split scanlines)
@@ -2813,17 +3977,20 @@ function drawHUD() {
 }
 
 function drawTouch() {
-  // virtual joystick
-  if (pointer.down && pointer.type === 'touch') {
+  // dynamic virtual joystick (Section G): anchored where the thumb landed
+  const t = joyId !== null ? touches.get(joyId) : null;
+  if (t) {
     ctx.globalCompositeOperation = 'lighter';
-    glow(pointer.sx, pointer.sy, 60, CY, 0.15);
+    glow(t.sx, t.sy, 60, CY, 0.15);
     ctx.globalCompositeOperation = 'source-over';
     ctx.strokeStyle = rgba(WH, 0.25); ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(pointer.sx, pointer.sy, JOY_MAX, 0, TAU); ctx.stroke();
-    let jx = pointer.x - pointer.sx, jy = pointer.y - pointer.sy;
+    ctx.beginPath(); ctx.arc(t.sx, t.sy, JOY_MAX, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = rgba(WH, 0.12);
+    ctx.beginPath(); ctx.arc(t.sx, t.sy, JOY_DEAD, 0, TAU); ctx.stroke();
+    let jx = t.x - t.sx, jy = t.y - t.sy;
     const l = Math.hypot(jx, jy); if (l > JOY_MAX) { jx = jx / l * JOY_MAX; jy = jy / l * JOY_MAX; }
     ctx.fillStyle = rgba(CY, 0.7);
-    ctx.beginPath(); ctx.arc(pointer.sx + jx, pointer.sy + jy, 26, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(t.sx + jx, t.sy + jy, 26, 0, TAU); ctx.fill();
   }
   // dash button
   const bx = W - 56, by = H - 56;
@@ -2865,10 +4032,14 @@ function startGame() {
     enemies: [], eProj: [], pProj: [], gems: [], pickups: [],
     particles: [], floaters: [], beams: [], arcs: [], telegraphs: [],
     kills: 0, score: 0, combo: 0, comboTimer: 0,
-    pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: 75, bossNum: 0, bossIndex: 0, bossTier: 0,
+    pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: FIRST_BOSS_AT, bossNum: 0, bossBag: [], bossBanner: null, bossTier: 0,
+    dirIntensity: 1, dirStress: 0, dirKps: 0, dirDps: 0, spawnRamp: 1,
+    glyphs: {}, glyphCount: 0, sigil: 0, ritual: null, sigilUI: null, lvUnlockAt: null,
+    dashZoom: 0, trail: [], focusTarget: null, dmgDir: null,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });
   enemyId = 1;
+  touches.clear(); joyId = null;          // never carry touch state across runs
   player.x = player.y = 0; player.vx = player.vy = 0;
   player.buffT = { triple: 0, nectar: 0, aura: 0, auraTick: 0 };
   player.level = 1; player.xp = 0; player.xpNext = 6;
@@ -2877,6 +4048,8 @@ function startGame() {
   player.stats = freshStats();
   recalc(); player.hp = player.maxHp;
   addWeapon('pulse');
+  // permanent meta unlock: slaying THE ARCHITECT grants a head start every run
+  if (META.architectSlain) { G.rerolls += 1; player.stats.damageMul *= META_ARCH_DMG; }
   G.cam.x = 0; G.cam.y = 0;
   hideOverlays();
   if (Sound) { Sound.startMusic(); Sound.setIntensity(0); Sound.setMusicTempo(112); }
@@ -2887,13 +4060,16 @@ function gameOver() {
   sfx('gameover');
   if (Sound) Sound.stopMusic();
   const cur = { score: G.score, time: Math.floor(G.time), kills: G.kills, level: player.level };
-  const isBest = cur.score > (G.best.score || 0);
+  const prevBest = G.best.score || 0;
+  const isBest = cur.score > prevBest;
   if (isBest) { G.best = cur; saveBest(cur); }
   document.getElementById('newBest').classList.toggle('show', isBest);
+  // "how close was this run" (Section L): score as a % of the previous best
+  const vsBest = isBest ? 'NEW BEST' : (prevBest ? Math.round(cur.score / prevBest * 100) + '% of best' : '—');
   document.getElementById('overStats').innerHTML = statGrid([
     ['Survived', fmtTime(cur.time)], ['Level', cur.level],
     ['Kills', cur.kills], ['Score', cur.score.toLocaleString()],
-    ['Best Score', (G.best.score || 0).toLocaleString()], ['Best Time', fmtTime(G.best.time || 0)],
+    ['Best Score', (G.best.score || 0).toLocaleString()], ['This Run', vsBest],
   ]);
   showOverlay('gameover');
 }
@@ -2924,7 +4100,8 @@ function toTitle() {
 function showTitle() {
   const b = G.best;
   document.getElementById('titleHi').textContent =
-    (b.score ? `Best: ${b.score.toLocaleString()} pts · ${fmtTime(b.time)} survived` : 'No record yet — set one.');
+    (b.score ? `Best: ${b.score.toLocaleString()} pts · ${fmtTime(b.time)} survived` : 'No record yet — set one.') +
+    (META.architectSlain ? '  ·  ◆ ARCHITECT SLAIN' : '');
   showOverlay('title');
 }
 
@@ -2946,13 +4123,8 @@ function toggleFull() {
   else (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
 }
 
-// touch on dash button
-canvas.addEventListener('pointerdown', e => {
-  if (!IS_TOUCH || G.state !== 'playing') return;
-  const r = canvas.getBoundingClientRect();
-  const x = e.clientX - r.left, y = e.clientY - r.top;
-  if (dist(x, y, W - 56, H - 56) < 40) { tryDash(); e.stopImmediatePropagation(); }
-}, true);
+// (the dash button is handled inside onPointerDown as an independent touch —
+// the old capture-phase listener is gone with the v2 multi-touch rewrite)
 
 // buttons
 document.getElementById('btnPlay').addEventListener('click', startGame);
@@ -2970,6 +4142,7 @@ let lastT = performance.now();
 function frame(now) {
   let dt = (now - lastT) / 1000;
   lastT = now;
+  if (dt < 0.5) perfSample(dt);      // rolling FPS sample (ignore tab-switch gaps)
   if (dt > 0.05) dt = 0.05;          // clamp big gaps (tab switches)
   update(dt);
   render();
