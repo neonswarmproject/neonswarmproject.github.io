@@ -4,6 +4,16 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v2.5 — 2026-06-11 — Boss absolutes
+
+- Every boss's HP **doubled** (roster base 950 → 1900; THE ARCHITECT
+  24 000 → 48 000).
+- Player damage **to bosses −25%** (`PLAYER_VS_BOSS`, applied at the single
+  damage funnel) — duels are won by dodging, not by out-statting the boss.
+- Verified build-independence: boss stats derive from elapsed time + bag-cycle
+  tier only; the adaptive mercy system and spawn director already exclude
+  bosses. Their power is absolute.
+
 ## v2.4 — 2026-06-11 — All weapon ranges −25%
 
 - New global `WRANGE = 0.75` applied at every weapon's range-defining site:

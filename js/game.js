@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '2.4';
+const VERSION = '2.5';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -1714,7 +1714,7 @@ const BOSS_IDS = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden'];
 // and OVERLORD has no guaranteed intro slot. Scaling comes from ELAPSED TIME +
 // completed cycles (tier), never a per-boss difficulty rank, so a "hard" boss
 // drawn early is fair and any boss drawn late is appropriately tougher.
-const BOSS_BASE_HP        = 950;   // calibrated: opening duel beatable with the starting weapon
+const BOSS_BASE_HP        = 1900;  // C2 (v2.5): DOUBLED — boss power is absolute, a real enemy
 const BOSS_HP_PER_MIN     = 0.55;  // +HP per elapsed minute
 const BOSS_HP_PER_TIER    = 0.85;  // +HP per completed bag cycle
 const BOSS_DMG_BASE       = 18;
@@ -1731,6 +1731,10 @@ const BOSS_PHASE_SHAKE = 0.4;
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
 // attack damage as fractions of the boss's own (already diff-scaled) e.dmg
 const B_BULLET = 0.5, B_BEAM = 0.8, B_NOVA = 0.9;
+// C2 (v2.5): the player hits bosses for 25% less — duels are won by dodging
+// and sustained pressure, not by out-statting the boss. Bosses themselves take
+// no input from the player's build anywhere (mercy + director exclude them).
+const PLAYER_VS_BOSS = 0.75;
 
 function bossRing(e, n, speed, dmgFrac, rot, color, opts) {
   for (let k = 0; k < n; k++) {
@@ -1894,7 +1898,7 @@ const WARDEN_LANCE_CD = 5, WARDEN_LANCE_N = 3, WARDEN_LANCE_TELE = 0.7, WARDEN_L
 
 /* ---- THE ARCHITECT (Section D): voluntary super-boss. Fixed, brutal stats —
    deliberately NOT touched by the adaptive director or build scaling. ---- */
-const ARCH_HP = 24000, ARCH_DMG = 30, ARCH_R = 110, ARCH_SPEED = 26;
+const ARCH_HP = 48000, ARCH_DMG = 30, ARCH_R = 110, ARCH_SPEED = 26;   // HP doubled (C2 boss absolutes)
 const ARCH_ENTRANCE = 2.6, ARCH_RITUAL = 4.0;
 const ARCH_NODE_N = 4, ARCH_NODE_HP = 1150, ARCH_NODE_DMG = 14, ARCH_NODE_ORBIT = 230, ARCH_NODE_FIRE = 2.4, ARCH_NODE_SPIN = 0.5;
 const ARCH_SHIELD_MUL = 0.35;     // core damage taken while any rune node lives
@@ -2952,6 +2956,7 @@ function damageEnemy(e, dmg, opts) {
     }
   }
   if (e.shieldMul) dmg *= e.shieldMul;     // ARCHITECT core shield while nodes live
+  if (e.boss) dmg *= PLAYER_VS_BOSS;       // C2: −25% player damage to every boss
   let crit = false;
   if (Math.random() < S().crit) { crit = true; dmg *= S().critMult; }
   dmg = Math.round(dmg);

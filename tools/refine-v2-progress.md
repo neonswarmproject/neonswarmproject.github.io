@@ -36,8 +36,9 @@ for every tunable. Zero console errors desktop + mobile.
 ### Combat & progression
 - [x] C1 ALL player weapon ranges −25% (v2.4) — global WRANGE=0.75 at every
       range site incl. acquisition radii + FOCUS_LEAD_R; AoE sizes untouched
-- [ ] C2 Boss absolutes: remove build-based boss balancing entirely; 2× every
-      boss's HP; player damage TO bosses −25%
+- [x] C2 Boss absolutes (v2.5): 2× HP everywhere (incl. ARCHITECT 48k),
+      PLAYER_VS_BOSS=0.75 at the damageEnemy funnel; verified no build inputs
+      reach boss stats (mercy + director already exclude bosses)
 - [ ] C3 Boss rotating lasers +110% damage
 - [ ] C4 PRISM and HIVE anti-orbit redesign — circling them must stop working
       (punish constant-radius movement; force engagement)
