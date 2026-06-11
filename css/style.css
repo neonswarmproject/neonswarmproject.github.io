@@ -276,6 +276,9 @@ html, body {
 }
 .newbest.show { display: block; }
 @keyframes blink { 50% { opacity: .4 } }
+.go-hint { margin-top: 10px; font-size: 12px; letter-spacing: .08em; color: #8f8cc4; opacity: .8; }
+.go-hint b { color: var(--cyan); }
+@media (pointer: coarse) { .go-hint { display: none; } } /* meaningless on touch */
 
 /* reduce motion */
 @media (prefers-reduced-motion: reduce) {

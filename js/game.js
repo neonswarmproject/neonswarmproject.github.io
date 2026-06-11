@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '2.0';
+const VERSION = '2.1';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -321,7 +321,7 @@ function key(e, down) {
       return;
     }
     if (G.state === 'gameover') {
-      if (k === 'Enter' || k === ' ') startGame();
+      if (k === 'Enter') startGame();   // ENTER only — dash keys must never skip the report
       return;
     }
     if (G.state === 'levelup') {
@@ -4024,6 +4024,12 @@ const overlays = {
 function hideOverlays() { for (const k in overlays) overlays[k].classList.remove('show'); }
 function showOverlay(id) { hideOverlays(); overlays[id].classList.add('show'); }
 
+// Q1: dying while mashing dash must never skip the death report — keyboard
+// restart is ENTER-only, and taps/clicks are ignored briefly after death so a
+// mobile double-tap dash can't tap-through into "Run it back".
+const GAMEOVER_GRACE_MS = 700;
+let goShownAt = 0;
+
 function startGame() {
   unlockAudio();
   // reset
@@ -4057,6 +4063,7 @@ function startGame() {
 
 function gameOver() {
   G.state = 'gameover';
+  goShownAt = performance.now();
   sfx('gameover');
   if (Sound) Sound.stopMusic();
   const cur = { score: G.score, time: Math.floor(G.time), kills: G.kills, level: player.level };
@@ -4128,7 +4135,9 @@ function toggleFull() {
 
 // buttons
 document.getElementById('btnPlay').addEventListener('click', startGame);
-document.getElementById('btnAgain').addEventListener('click', startGame);
+document.getElementById('btnAgain').addEventListener('click', () => {
+  if (performance.now() - goShownAt >= GAMEOVER_GRACE_MS) startGame();
+});
 document.getElementById('btnResume').addEventListener('click', togglePause);
 document.getElementById('btnQuit').addEventListener('click', toTitle);
 document.getElementById('btnPause').addEventListener('click', () => { if (G.state === 'playing' || G.state === 'paused') togglePause(); });

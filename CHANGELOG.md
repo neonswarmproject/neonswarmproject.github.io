@@ -4,6 +4,14 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v2.1 — 2026-06-11 — ENTER-only restart
+
+- Game-over restart is **ENTER-only**: Space/Shift are the dash keys, so dying
+  mid-dash-mash no longer skips the death report.
+- "Run it back" ignores taps/clicks for the first 0.7s of the death screen —
+  a mobile double-tap dash can't tap-through into an instant new run.
+- Small "press ENTER to run it back" hint on the death screen (hidden on touch).
+
 ## v2.0 — 2026-06-11 — The refinement pass (boss-rush core + THE ARCHITECT)
 
 Twelve subsystems shipped from branch `refine/v2`, closed by an adversarial

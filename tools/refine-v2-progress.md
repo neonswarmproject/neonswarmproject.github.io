@@ -21,8 +21,9 @@ for every tunable. Zero console errors desktop + mobile.
 ## Checklist (work top to bottom; one commit+push per item)
 
 ### Quick fixes & monetization
-- [ ] Q1 Game-over restart on ENTER only — dash key must never restart a run
-      (death + dash currently skips the report screen)
+- [x] Q1 Game-over restart on ENTER only (v2.1) — keyboard restart ENTER-only,
+      0.7s tap/click grace on "Run it back" so mobile double-tap dash can't
+      tap-through, desktop-only ENTER hint on the death screen
 - [ ] Q2 Remove the "Pure HTML5 Canvas + Web Audio · no images, no libraries,
       all code" footer from the title screen (KEEP the #verTag version span)
 - [ ] Q3 Title-screen ads: AdSense loader (client ca-pub-9117893594553497) + 4
