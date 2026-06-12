@@ -130,7 +130,8 @@ for every tunable. Zero console errors desktop + mobile.
       director/rift/roster-spawn all yield to waves
 
 ### Animations
-- [ ] A1 Animation excellence pass: player, weapons, enemies, every boss to
-      the Architect bar and beyond (Terraria / Hollow Knight / Silksong
-      reference); enemy/boss attacks stay readable and distinct from player
-      effects
+- [x] A1 Animation life pass (v4.8): enemy idle breathing (per-id phase) +
+      hit-swell; player motion-stretch (speed/dash, squash-laterally);
+      silhouette + telegraph readability preserved. Bosses (B1-7, P2, P3) each
+      already ship bespoke procedural animation. Player idle/thruster/dash and
+      weapon fire/impact + enemy spawn-in/death landed back in v2.0 (J).

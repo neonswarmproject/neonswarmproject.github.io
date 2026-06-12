@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '4.7';
+const VERSION = '4.8';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -2087,6 +2087,8 @@ function currentEnemyLevel() {
 }
 
 const ENEMY_SPAWNIN_T = 0.35;   // s scale/fade-in when an enemy materializes (Section J)
+// A1 (v4.8) idle-life tunables
+const ENEMY_BREATHE = 0.045, ENEMY_BREATHE_F = 4.2, ENEMY_HITPOP = 0.14;
 
 function spawnEnemy(type, x, y, opts) {
   if (G.enemies.length >= MAX_ENEMIES) return null;
@@ -6278,7 +6280,12 @@ function render() {
     const phasing = e.type === 'phantom' && e.intangible > 0;
     // spawn-in (Section J): bodies scale and fade in instead of popping
     const spawnK = e.spawn > 0 ? 1 - clamp(e.spawn / ENEMY_SPAWNIN_T, 0, 1) : 1;
-    const scaleK = spawnK < 1 ? 0.3 + 0.7 * spawnK : 1;
+    // A1 (v4.8): idle "breathing" so nothing reads as a static sprite, plus a
+    // swell on hit for impact (Hollow Knight / Terraria liveliness). Per-enemy
+    // phase via e.id keeps the crowd from pulsing in lockstep.
+    const breathe = 1 + ENEMY_BREATHE * Math.sin(G.time * ENEMY_BREATHE_F + e.id * 1.3);
+    const hitPop = e.flash > 0 ? 1 + e.flash * ENEMY_HITPOP : 1;
+    const scaleK = (spawnK < 1 ? 0.3 + 0.7 * spawnK : 1) * breathe * hitPop;
     let alpha = 1;
     if (phasing) alpha = (e.phState === 'fade') ? clamp(0.25 + 0.7 * (e.ghostA ?? 1), 0.25, 1) : 0.3; // fade-out telegraph, then ghostly
     if (spawnK < 1) alpha *= 0.25 + 0.75 * spawnK;
@@ -6387,6 +6394,10 @@ function drawPlayer() {
   ctx.save();
   ctx.translate(player.x, player.y);
   ctx.rotate(player.aim);
+  // A1 (v4.8): motion stretch — the hull elongates along its heading with speed
+  // (max in a dash), squashing laterally. Pure juice; silhouette stays readable.
+  const stretch = clamp(spd / (BASE_SPEED * 1.6), 0, 1) * 0.18 + (player.dashTime > 0 ? 0.22 : 0);
+  ctx.scale(1 + stretch, 1 - stretch * 0.5);
   // animated thruster flame (Section J): grows with speed, white-hot in a dash
   const flame = clamp(spd / (BASE_SPEED * 2), 0, 1);
   if (flame > 0.05) {

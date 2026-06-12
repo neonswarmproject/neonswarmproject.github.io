@@ -4,6 +4,22 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v4.8 — 2026-06-12 — Animation life pass
+
+The capstone juice pass (Hollow Knight / Terraria liveliness), kept readable —
+enemy bodies move, player effects stay visually distinct:
+
+- **Enemy idle breathing:** every non-boss enemy gently pulses (±4.5%) with a
+  per-enemy phase (via id) so the swarm never reads as static sprites and no
+  two pulse in lockstep.
+- **Hit-swell:** enemies swell briefly when struck, on top of the white flash —
+  hits land with weight.
+- **Player motion-stretch:** the hull elongates along its heading with speed
+  (and harder in a dash), squashing laterally — momentum you can feel. The
+  silhouette and the readable thruster/halo are preserved.
+- (The eleven roster bosses, two dimension bosses, and THE DEVELOPER each
+  already carry bespoke procedural animation from their own builds.)
+
 ## v4.7 — 2026-06-12 — Beat THE DEVELOPER → ROOT ACCESS + Survival
 
 The finale's reward, and the endless mode after it:
