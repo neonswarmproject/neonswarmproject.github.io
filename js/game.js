@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '4.1';
+const VERSION = '4.2';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -4091,6 +4091,110 @@ const BOSSES = {
           }
         }
       }
+
+      /* ---- B7 (v4.2): it was summoned by eleven relics — it WIELDS them. ----
+         Each phase awakens an ECHO of a fallen roster boss. */
+      // ECHO: TRINITY (phase 2+) — two phantom vertices; the triangle burns
+      if (e.phase >= 1) {
+        if (d.triA === undefined) { d.triA = rand(0, TAU); d.triT = 6; d.triState = 'idle'; }
+        d.triA += 0.5 * dt;
+        const TR2 = 240;
+        d.tri = [
+          { x: e.x + Math.cos(d.triA) * TR2, y: e.y + Math.sin(d.triA) * TR2 },
+          { x: e.x + Math.cos(d.triA + TAU / 3) * TR2, y: e.y + Math.sin(d.triA + TAU / 3) * TR2 },
+        ];
+        const pts = [e, d.tri[0], d.tri[1]];
+        if (d.triState === 'idle') {
+          d.triT -= dt;
+          if (d.triT <= 0) {
+            if (!d.triEcho) { d.triEcho = true; floater(e.x, e.y - e.r - 70, 'ECHO: TRINITY', BL, 18); }
+            d.triState = 'tele'; d.triT = 0.9;
+            for (let k = 0; k < 3; k++) {
+              const A = pts[k], B = pts[(k + 1) % 3];
+              addTelegraph({ kind: 'line', x: A.x, y: A.y, a: angTo(A.x, A.y, B.x, B.y), len: dist(A.x, A.y, B.x, B.y), w: 8, dur: 0.9, color: BL });
+            }
+          }
+        } else if (d.triState === 'tele') {
+          d.triT -= dt; if (d.triT <= 0) { d.triState = 'fire'; d.triT = 1.8; }
+        } else {
+          d.triT -= dt;
+          for (let k = 0; k < 3; k++) {
+            const A = pts[k], B = pts[(k + 1) % 3];
+            G.beams.push({ x1: A.x, y1: A.y, x2: B.x, y2: B.y, w: 12, life: 0.05, max: 0.05, color: BL });
+            if (segDist(A.x, A.y, B.x, B.y, player.x, player.y) < 6 + player.r) hurtPlayer(e.dmg * B_BEAM * 0.8, A.x, A.y);
+          }
+          if (d.triT <= 0) { d.triState = 'idle'; d.triT = 7 * F; }
+        }
+      }
+      // ECHO: LEVIATHAN (phase 3+) — a serpent ring constricts around you
+      if (e.phase >= 2) {
+        d.coilT2 = (d.coilT2 ?? 9) - dt;
+        if (d.coilT2 <= 0 && !d.coil2) {
+          d.coilT2 = 11 * F;
+          d.coil2 = { cx: player.x, cy: player.y, r: 300, t: 2.2, gate: rand(0, TAU) };
+          addTelegraph({ kind: 'zone', x: player.x, y: player.y, r: 120, dur: 2.2, color: '#3ef0c8' });
+          if (!d.levEcho) { d.levEcho = true; floater(e.x, e.y - e.r - 70, 'ECHO: LEVIATHAN', '#3ef0c8', 18); }
+        }
+        if (d.coil2) {
+          const c2 = d.coil2; c2.t -= dt; c2.r = Math.max(90, c2.r - 95 * dt);
+          const segs = 16;
+          for (let k = 0; k < segs; k++) {
+            const a = c2.gate + k / segs * TAU;
+            let da = a - c2.gate; while (da > Math.PI) da -= TAU; while (da < -Math.PI) da += TAU;
+            if (Math.abs(da) < 0.5) continue;          // the white gate
+            const sx2 = c2.cx + Math.cos(a) * c2.r, sy2 = c2.cy + Math.sin(a) * c2.r;
+            if (dist2(sx2, sy2, player.x, player.y) < (12 + player.r) ** 2) hurtPlayer(e.dmg * 0.5, sx2, sy2);
+          }
+          if (c2.t <= 0) {
+            if (dist(player.x, player.y, c2.cx, c2.cy) < c2.r) hurtPlayer(e.dmg * B_NOVA, c2.cx, c2.cy);
+            spawnRing(c2.cx, c2.cy, 20, c2.r + 40, 0.4, '#3ef0c8');
+            sfx('bigExplode');
+            d.coil2 = null;
+          }
+        }
+      }
+      // ECHO: OBELISK (phase 4+) — two rotating stone bars
+      if (e.phase >= 3) {
+        if (!d.obeEcho) { d.obeEcho = true; floater(e.x, e.y - e.r - 70, 'ECHO: OBELISK', OR, 18); }
+        d.latA2 = (d.latA2 || 0) + 0.3 * dt;
+        for (let k = 0; k < 2; k++) {
+          const a = d.latA2 + k * Math.PI;
+          const x1 = e.x + Math.cos(a) * (e.r + 10), y1 = e.y + Math.sin(a) * (e.r + 10);
+          const x2 = e.x + Math.cos(a) * (e.r + 330), y2 = e.y + Math.sin(a) * (e.r + 330);
+          G.beams.push({ x1, y1, x2, y2, w: 16, life: 0.05, max: 0.05, color: OR });
+          if (segDist(x1, y1, x2, y2, player.x, player.y) < 8 + player.r) hurtPlayer(e.dmg * 0.7, (x1 + x2) / 2, (y1 + y2) / 2);
+        }
+      }
+      // ECHO: MIRROR + ECHO: NEXUS (final phase) — intercepts + portal relays
+      if (e.phase >= 4) {
+        d.intT2 = (d.intT2 ?? 4) - dt;
+        if (d.intT2 <= 0) {
+          d.intT2 = 4.5 * F;
+          if (!d.mirEcho) { d.mirEcho = true; floater(e.x, e.y - e.r - 70, 'ECHO: MIRROR', MA, 18); }
+          const pa = (player.vx || player.vy) ? Math.atan2(player.vy, player.vx) : player.aim;
+          const ix = player.x + Math.cos(pa) * 260, iy = player.y + Math.sin(pa) * 260;
+          addTelegraph({ kind: 'zone', x: ix, y: iy, r: 110, dur: 0.6, color: WH });
+          d.ints2 = d.ints2 || []; d.ints2.push({ x: ix, y: iy, t: 0.6 });
+        }
+        tickZoneList(d.ints2, dt, 110, e);
+        if (!d.ports2) {
+          d.ports2 = []; const lim = ARENA / 2 - 80;
+          for (let k = 0; k < 3; k++) {
+            const a = k / 3 * TAU;
+            d.ports2.push({ x: clamp(e.x + Math.cos(a) * 420, -lim, lim), y: clamp(e.y + Math.sin(a) * 420, -lim, lim), spin: rand(0, TAU) });
+          }
+          floater(e.x, e.y - e.r - 90, 'ECHO: NEXUS', CY, 18);
+        }
+        d.nexT = (d.nexT ?? 2.6) - dt;
+        if (d.nexT <= 0) {
+          d.nexT = 2.8 * F;
+          const p = d.ports2.slice().sort((A, B) => dist2(A.x, A.y, player.x, player.y) - dist2(B.x, B.y, player.x, player.y))[0];
+          const base = angTo(p.x, p.y, player.x + player.vx * 0.3, player.y + player.vy * 0.3);
+          for (let k = -1; k <= 1; k++)
+            spawnEnemyProjectile(p.x, p.y, Math.cos(base + k * 0.18) * 230, Math.sin(base + k * 0.18) * 230, e.dmg * B_BULLET, CY, { r: 6, arm: 0.22 });
+          spawnRing(p.x, p.y, 8, 40, 0.3, CY);
+        }
+      }
     },
     onPhase(e, ph) {
       const names = ['SURVEY', 'REPLICATE', 'REWRITE', 'CONDUCT', 'ERASE'];
@@ -4099,6 +4203,31 @@ const BOSSES = {
     },
     draw(e) {
       const d = e.data, t = G.time;
+      // B7 relic-echo visuals
+      if (d.tri) for (const P2 of d.tri) {
+        glow(P2.x, P2.y, 26, BL, 0.5);
+        ctx.fillStyle = rgba(BL, 0.10); ctx.strokeStyle = rgba(WH, 0.55); ctx.lineWidth = 2;
+        poly(P2.x, P2.y, 18, 4, t * 1.3); ctx.fill(); ctx.stroke();
+      }
+      if (d.coil2) {
+        const c2 = d.coil2, segs = 16;
+        for (let k = 0; k < segs; k++) {
+          const a = c2.gate + k / segs * TAU;
+          let da = a - c2.gate; while (da > Math.PI) da -= TAU; while (da < -Math.PI) da += TAU;
+          const gate = Math.abs(da) < 0.5;
+          const sx2 = c2.cx + Math.cos(a) * c2.r, sy2 = c2.cy + Math.sin(a) * c2.r;
+          glow(sx2, sy2, gate ? 12 : 9, gate ? WH : '#3ef0c8', gate ? 0.9 : 0.6);
+          ctx.strokeStyle = rgba(gate ? WH : '#3ef0c8', 0.85); ctx.lineWidth = 2;
+          poly(sx2, sy2, gate ? 9 : 7, 4, a); ctx.stroke();
+        }
+      }
+      if (d.ports2) for (const p of d.ports2) {
+        glow(p.x, p.y, 24, CY, 0.5);
+        ctx.strokeStyle = rgba(CY, 0.9); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 20, t * 2 + p.spin, t * 2 + p.spin + Math.PI * 1.4); ctx.stroke();
+        ctx.strokeStyle = rgba(PU, 0.7); ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 12, -t * 3, -t * 3 + Math.PI * 1.2); ctx.stroke();
+      }
       const nodesAlive = d.nodes ? d.nodes.some(n => !n.dead) : false;
       // triple counter-rotating rune rings
       const ringCols = [PU, MA, CY];

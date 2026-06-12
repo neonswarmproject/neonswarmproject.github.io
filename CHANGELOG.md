@@ -4,6 +4,23 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v4.2 — 2026-06-12 — THE ARCHITECT wields every relic (finale escalation)
+
+It was summoned by eleven relics — now it uses them. Each phase awakens an
+announced **ECHO** of a fallen roster boss, stacking onto its existing kit:
+
+- **Phase 2 — ECHO: TRINITY:** two phantom vertices orbit it; the triangle's
+  telegraphed edges burn on a cycle.
+- **Phase 3 — ECHO: LEVIATHAN:** a serpent ring materializes around you and
+  constricts — find the white gate before the snap.
+- **Phase 4 — ECHO: OBELISK:** two rotating stone bars grind around it.
+- **Phase 5 (ERASE) — ECHO: MIRROR + ECHO: NEXUS:** dash-intercept zones
+  pre-fired along your velocity, plus three portals relaying led fans from
+  whichever exit is closest to you.
+- All echo cadences obey the ERASE cooldown compression. The finale now
+  reads as a finale: by the last phase the Architect is fighting you with
+  the whole roster at once.
+
 ## v4.1 — 2026-06-12 — Boss relics & the full-set summon
 
 - Every roster boss drop is now a true **RELIC**: the dropped fragment, its
