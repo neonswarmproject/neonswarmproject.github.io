@@ -95,8 +95,9 @@ for every tunable. Zero console errors desktop + mobile.
       reweave on timer + on phase wounds, burning link cycle, warp snares
       (teleport + glitch jolt), phase-3 portal spokes; keep-away node;
       glyph #11
-- [ ] B6 Full relic set → summon THE ARCHITECT at will (extend the existing
-      glyph/sigil ritual to the grown roster)
+- [x] B6 Relic set → Architect summon (v4.1): per-boss colored relics
+      (pickup/floater/pip identity), pips map to specific bosses, full set
+      of 11 forges the sigil → G/tap summons the Architect at will
 - [ ] B7 THE ARCHITECT absorbs EVERY roster boss's mechanics (fold in each
       new boss as it lands) + finale-grade escalation so it reads as a finale
 

@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '4.0';
+const VERSION = '4.1';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -4834,12 +4834,14 @@ function applyPickup(type, p) {
     player.buffT.guard = C8_BUFF_T;
     floater(player.x, player.y - 24, 'GUARD FRAME', BL, 18); sfx('coin');
     for (let i = 0; i < 12; i++) spawnParticle(player.x, player.y, rand(-130, 130), rand(-130, 130), 0.45, 3, BL, 'spark');
-  } else if (type === 'glyph') {            // ARCHITECT Glyph Fragment (Section D)
+  } else if (type === 'glyph') {            // ARCHITECT Relic/Glyph Fragment (Section D / B6)
     if (p && p.glyphId) G.glyphs[p.glyphId] = true;
     const n = Object.keys(G.glyphs).length;
     G.glyphCount = n;                        // cached for the per-frame HUD draw
-    floater(player.x, player.y - 24, 'GLYPH ' + n + '/' + BOSS_IDS.length, YE, 18); sfx('coin');
-    for (let i = 0; i < 14; i++) spawnParticle(player.x, player.y, rand(-120, 120), rand(-120, 120), 0.5, 3, YE, 'spark');
+    const gcol = (p && p.glyphId && BOSSES[p.glyphId]) ? BOSSES[p.glyphId].color : YE;
+    const gname = (p && p.glyphId && BOSSES[p.glyphId]) ? BOSSES[p.glyphId].name : 'GLYPH';
+    floater(player.x, player.y - 24, gname + ' RELIC ' + n + '/' + BOSS_IDS.length, gcol, 18); sfx('coin');
+    for (let i = 0; i < 14; i++) spawnParticle(player.x, player.y, rand(-120, 120), rand(-120, 120), 0.5, 3, gcol, 'spark');
     if (n >= BOSS_IDS.length && G.sigil === 0) {
       G.sigil = 1;
       G.bossBanner = { name: 'THE SIGIL IS FORGED', life: 3.0, max: 3.0 };
@@ -5275,7 +5277,7 @@ function render() {
     glow(g.x, g.y, 7, GR, 0.8);
   }
   // pickups (gentle bob + pulsing glow)
-  for (const p of G.pickups) { const c = PICKUP_COLOR[p.type] || WH; glow(p.x, p.y + Math.sin(p.t * 3) * 3, 16 + Math.sin(p.t * 6) * 3, c, 0.9); }
+  for (const p of G.pickups) { let c = PICKUP_COLOR[p.type] || WH; if (p.type === 'glyph' && p.glyphId && BOSSES[p.glyphId]) c = BOSSES[p.glyphId].color; glow(p.x, p.y + Math.sin(p.t * 3) * 3, 16 + Math.sin(p.t * 6) * 3, c, 0.9); }
   // enemy projectiles
   // C6 spore trail puddles (under projectiles)
   if (G.spores) for (const sp of G.spores) {
@@ -5355,7 +5357,8 @@ function render() {
 
   // pickups: hex badge + vector glyph (no fonts -> crisp everywhere)
   for (const p of G.pickups) {
-    const c = PICKUP_COLOR[p.type] || WH;
+    let c = PICKUP_COLOR[p.type] || WH;
+    if (p.type === 'glyph' && p.glyphId && BOSSES[p.glyphId]) c = BOSSES[p.glyphId].color;   // B6: relics carry their boss's color
     const bobY = p.y + Math.sin(p.t * 3) * 3;
     ctx.fillStyle = rgba(c, 0.18); ctx.strokeStyle = c; ctx.lineWidth = 2;
     poly(p.x, bobY, 13, 6, p.t * 2); ctx.fill(); ctx.stroke();
@@ -5731,10 +5734,11 @@ function drawHUD() {
       poly(sx, sy, 24, 6, forged ? G.time * 1.2 : 0.2); ctx.fill(); ctx.stroke();
       ctx.strokeStyle = forged ? WH : rgba(WH, 0.6); ctx.lineWidth = 2;
       star(sx, sy, 9, 4, G.time * 0.4, 0.5); ctx.stroke();
-      for (let i = 0; i < BOSS_IDS.length; i++) {       // glyph progress pips
+      for (let i = 0; i < BOSS_IDS.length; i++) {       // relic pips — each slot IS its boss
         const a = -Math.PI / 2 + i / BOSS_IDS.length * TAU;
-        ctx.fillStyle = i < glyphN ? YE : rgba(WH, 0.18);
-        ctx.beginPath(); ctx.arc(sx + Math.cos(a) * 31, sy + Math.sin(a) * 31, 3, 0, TAU); ctx.fill();
+        const owned = !!G.glyphs[BOSS_IDS[i]];
+        ctx.fillStyle = owned ? (BOSSES[BOSS_IDS[i]].color || YE) : rgba(WH, 0.18);
+        ctx.beginPath(); ctx.arc(sx + Math.cos(a) * 31, sy + Math.sin(a) * 31, owned ? 3.4 : 3, 0, TAU); ctx.fill();
       }
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillStyle = rgba(WH, forged ? 0.8 : 0.5);

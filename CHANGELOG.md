@@ -4,6 +4,16 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v4.1 — 2026-06-12 — Boss relics & the full-set summon
+
+- Every roster boss drop is now a true **RELIC**: the dropped fragment, its
+  pickup glow, its floater ("SENTINEL TRINITY RELIC 7/11") and its pip on the
+  sigil slot all carry that boss's color. Each pip on the sigil ring maps to
+  a specific boss — you can see exactly which relics you're missing.
+- Collecting all **11** forges the SIGIL; pressing **G** (or tapping the
+  slot) summons THE ARCHITECT at a moment of your choosing — the ritual
+  scaled automatically as the roster grew from 6 to 11.
+
 ## v4.0 — 2026-06-12 — NEXUS (new roster boss; the roster is complete)
 
 The portal network. The node barely fights you — its web does:
