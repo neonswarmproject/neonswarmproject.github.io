@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '3.8';
+const VERSION = '3.9';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -635,6 +635,7 @@ function tryDash() {
   const mv = moveVector();
   let d = (mv.mag > 0) ? { x: mv.x, y: mv.y } : { x: Math.cos(player.aim), y: Math.sin(player.aim) };
   player.dashDir = d;
+  if (G.mirrorIntel) G.mirrorIntel.dashes++;            // B4: it counts your dashes
   player.dashTime = DASH_TIME * S().dashRangeMul * (player.buffT.longdash > 0 ? LONGDASH_MUL : 1);   // C6 Overdrive + C8 Long Dash
   player.dashCD = DASH_CD * S().dashCdMul;
   player.invuln = Math.max(player.invuln, DASH_IFRAME * S().invulnMul);
@@ -2235,7 +2236,7 @@ function director(dt) {
    suppresses normal spawns and sweeps the arena on arrival; when the bag
    refills, bossTier++ and bosses return stronger.
    ========================================================================= */
-const BOSS_IDS = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden', 'trinity', 'leviathan', 'obelisk'];
+const BOSS_IDS = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden', 'trinity', 'leviathan', 'obelisk', 'mirror'];
 // v2 boss-rush: a shuffled bag picks the next boss — no repeats within a cycle
 // and OVERLORD has no guaranteed intro slot. Scaling comes from ELAPSED TIME +
 // completed cycles (tier), never a per-boss difficulty rank, so a "hard" boss
@@ -2490,6 +2491,18 @@ const OBE_PYLON_N = 3, OBE_PYLON_HP = 700, OBE_SHIELD = 0.45;
 const OBE_RELOC_CD = 12, OBE_RELOC_TELE = 1.0, OBE_RELOC_FAR = 900;
 const OBE_MEGA_W = 34, OBE_MEGA_SPIN = 0.22, OBE_MEGA_LEN = 1000;
 const OBE_FLIP_CD_MIN = 3, OBE_FLIP_CD_MAX = 5, OBE_FLIP_WARN = 0.4;
+// B4 (v3.9) MIRROR — it has been learning you since the run began; it fights
+// as an improved copy and ADAPTS mid-duel if the fight drags.
+const MIR_ADAPT_T = 12;                                  // s between adaptations
+const MIR_DASH_T = 0.22, MIR_DASH_SPD = 1400;            // its mirrored dash
+const MIR_VOLLEY_CD = 2.2, MIR_BSPD = 240;
+const MIR_BEAM_CD = 4.2, MIR_BEAM_TELE = 0.8, MIR_BEAM_LEN = 700, MIR_BEAM_W = 16, MIR_BEAM_FIRE = 0.5;
+const MIR_BLADE_N = 4, MIR_BLADE_R = 90, MIR_BLADE_SPIN = 2.4;
+const MIR_NOVA_CD = 3.6, MIR_NOVA_R = 200, MIR_NOVA_TELE = 0.7;
+const MIR_SEEK_CD = 3.0, MIR_SEEK_N = 3;
+const MIR_SHARD_CD = 5.5, MIR_SHARD_N = 8, MIR_SHARD_SPD = 240;
+const MIR_BLINK_CD = 4.5, MIR_REPULSE_CD = 5, MIR_INT_CD = 4.5, MIR_INT_TELE = 0.6, MIR_INT_R = 110;
+const MIR_KITE_D = 420, MIR_HUG_D = 200;                 // habit thresholds (avg duel distance)
 
 /* ---- THE ARCHITECT (Section D): voluntary super-boss. Fixed, brutal stats —
    deliberately NOT touched by the adaptive director or build scaling. ---- */
@@ -3556,6 +3569,213 @@ const BOSSES = {
         poly(rx, ry, 6, 3, a + t); ctx.stroke();
         glow(rx, ry, 5, OR, 0.5);
       }
+    },
+  },
+
+  /* ---- SLOT 9 (B4, v3.9): MIRROR — it is more you than you ---- */
+  mirror: {
+    id: 'mirror', name: 'MIRROR', color: MA, r: 30, speed: 80, hpMul: 1.4,
+    drop: 'longdash', phaseThresholds: [0.66, 0.33],
+    update(e, dt) {
+      const d = e.data;
+      if (!d.init) {
+        d.init = true;
+        // it built itself from everything it watched you do this run
+        const wi = G.mirrorIntel || { dashes: 0, moveSum: 0, moveN: 0 };
+        const top = player.weapons.slice().sort((a, b) => b.level - a.level)[0];
+        const FAM = { pulse: 'volley', sentry: 'volley', flak: 'volley', rail: 'volley', reflector: 'volley',
+          beam: 'beam', prismbeam: 'beam',
+          orbit: 'blades', pulsar: 'blades', whip: 'blades',
+          nova: 'nova', chain: 'nova', storm: 'nova', echo: 'nova', hammer: 'nova', frost: 'nova',
+          missile: 'seek', glaive: 'seek', drill: 'seek', vortex: 'seek', mines: 'seek' };
+        d.style = (top && FAM[top.id]) || 'volley';
+        d.styleName = top ? WEAPONS[top.id].name : 'Pulse Cannon';
+        const avgMove = wi.moveN ? wi.moveSum / wi.moveN : BASE_SPEED;
+        e.speed = clamp(avgMove * 1.08, 70, 330);                 // moves like you. better.
+        const dpm = wi.dashes / Math.max(0.5, G.time / 60);
+        d.dashCD = clamp(60 / Math.max(3, dpm), 2.2, 7);          // dashes like you. more.
+        d.dashT = d.dashCD; d.dashing = 0;
+        d.adaptT = MIR_ADAPT_T; d.adapts = []; d.cdMul = 1;
+        d.atkT = 1.2; d.shardT = MIR_SHARD_CD; d.bladeA = 0;
+        d.fT = 0; d.fDistSum = 0; d.fDistN = 0;
+        d.blinkT = MIR_BLINK_CD; d.repT = MIR_REPULSE_CD; d.intT = MIR_INT_CD; d.ints = [];
+        floater(e.x, e.y - e.r - 30, 'IT COPIED YOUR ' + d.styleName.toUpperCase(), MA, 16);
+      }
+      // mirrored dash (leaves YOUR ghost trail — that is the point)
+      d.dashT -= dt;
+      if (d.dashT <= 0 && d.dashing <= 0) {
+        d.dashT = d.dashCD * d.cdMul;
+        const a = angTo(e.x, e.y, player.x, player.y) + rand(-0.5, 0.5);
+        d.dvx = Math.cos(a) * MIR_DASH_SPD; d.dvy = Math.sin(a) * MIR_DASH_SPD;
+        d.dashing = MIR_DASH_T;
+        sfx('dash');
+      }
+      if (d.dashing > 0) {
+        d.dashing -= dt;
+        const lim = ARENA / 2 - e.r;
+        e.x = clamp(e.x + d.dvx * dt, -lim, lim);
+        e.y = clamp(e.y + d.dvy * dt, -lim, lim);
+        G.trail.push({ x: e.x, y: e.y, aim: Math.atan2(d.dvy, d.dvx), life: DASH_TRAIL_LIFE, max: DASH_TRAIL_LIFE });
+      }
+      // copied weapon style
+      d.atkT -= dt;
+      if (d.atkT <= 0) {
+        const base = angTo(e.x, e.y, player.x + player.vx * 0.4, player.y + player.vy * 0.4);
+        if (d.style === 'beam') {
+          d.atkT = MIR_BEAM_CD * d.cdMul;
+          d.beam = { a: base, t: MIR_BEAM_TELE, fire: MIR_BEAM_FIRE };
+          addTelegraph({ kind: 'line', x: e.x, y: e.y, a: base, len: MIR_BEAM_LEN, w: 10, dur: MIR_BEAM_TELE, color: MA });
+        } else if (d.style === 'nova') {
+          d.atkT = MIR_NOVA_CD * d.cdMul;
+          d.nova = MIR_NOVA_TELE;
+          addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: MIR_NOVA_R, dur: MIR_NOVA_TELE, color: MA });
+        } else if (d.style === 'seek') {
+          d.atkT = MIR_SEEK_CD * d.cdMul;
+          for (let k = 0; k < MIR_SEEK_N; k++) {
+            const a = rand(0, TAU);
+            spawnEnemyProjectile(e.x, e.y, Math.cos(a) * 130, Math.sin(a) * 130, e.dmg * B_BULLET, MA, { kind: 'home', turn: 1.2, life: 3.2, r: 7 });
+          }
+        } else {   // volley (also the blades style's ranged poke, slower)
+          d.atkT = MIR_VOLLEY_CD * (d.style === 'blades' ? 1.8 : 1) * d.cdMul;
+          for (let k = -2; k <= 2; k++)
+            spawnEnemyProjectile(e.x, e.y, Math.cos(base + k * 0.13) * MIR_BSPD, Math.sin(base + k * 0.13) * MIR_BSPD, e.dmg * B_BULLET, MA, { r: 6 });
+        }
+        e.flash = 0.6;
+      }
+      if (d.beam) {
+        d.beam.t -= dt;
+        if (d.beam.t <= 0) {
+          const ex = e.x + Math.cos(d.beam.a) * MIR_BEAM_LEN, ey = e.y + Math.sin(d.beam.a) * MIR_BEAM_LEN;
+          G.beams.push({ x1: e.x, y1: e.y, x2: ex, y2: ey, w: MIR_BEAM_W, life: 0.05, max: 0.05, color: MA });
+          if (segDist(e.x, e.y, ex, ey, player.x, player.y) < MIR_BEAM_W / 2 + player.r) hurtPlayer(e.dmg * B_BEAM, e.x, e.y);
+          d.beam.fire -= dt;
+          if (d.beam.fire <= 0) d.beam = null;
+        }
+      }
+      if (d.nova !== undefined && d.nova !== null) {
+        d.nova -= dt;
+        if (d.nova <= 0) {
+          explodeAt(e.x, e.y, MIR_NOVA_R, MA);
+          if (dist(e.x, e.y, player.x, player.y) < MIR_NOVA_R + player.r) hurtPlayer(e.dmg * B_NOVA, e.x, e.y);
+          d.nova = null;
+        }
+      }
+      if (d.style === 'blades') {
+        d.bladeA += MIR_BLADE_SPIN * dt;
+        for (let k = 0; k < MIR_BLADE_N; k++) {
+          const a = d.bladeA + k / MIR_BLADE_N * TAU;
+          const bx = e.x + Math.cos(a) * MIR_BLADE_R, by = e.y + Math.sin(a) * MIR_BLADE_R;
+          if (dist2(bx, by, player.x, player.y) < (14 + player.r) ** 2) hurtPlayer(e.dmg * 0.6, bx, by);
+        }
+      } else d.bladeA += dt * 1.2;   // shard veil still spins
+      // SHARD VEIL (its own ability) — and from phase 3, your OTHER reflection
+      // across your own position echoes the fan at half strength
+      if (e.phase >= 2) { d.ex2 = 2 * player.x - e.x; d.ey2 = 2 * player.y - e.y; }
+      d.shardT -= dt;
+      if (d.shardT <= 0) {
+        d.shardT = MIR_SHARD_CD * d.cdMul;
+        for (let k = 0; k < MIR_SHARD_N; k++) {
+          const a = k / MIR_SHARD_N * TAU + d.bladeA;
+          spawnEnemyProjectile(e.x + Math.cos(a) * 30, e.y + Math.sin(a) * 30, Math.cos(a) * MIR_SHARD_SPD, Math.sin(a) * MIR_SHARD_SPD, e.dmg * B_BULLET, WH, { r: 5, arm: 0.25 });
+          if (e.phase >= 2 && d.ex2 !== undefined)
+            spawnEnemyProjectile(d.ex2 + Math.cos(a) * 30, d.ey2 + Math.sin(a) * 30, Math.cos(a) * MIR_SHARD_SPD, Math.sin(a) * MIR_SHARD_SPD, e.dmg * B_BULLET * 0.5, PU, { r: 4, arm: 0.3 });
+        }
+        sfx('zap');
+      }
+      // ADAPTATION: if the duel drags, it reads your habits and counters them
+      d.fT -= dt;
+      if (d.fT <= 0) { d.fT = 0.5; d.fDistSum += dist(e.x, e.y, player.x, player.y); d.fDistN++; }
+      d.adaptT -= dt;
+      if (d.adaptT <= 0 && d.adapts.length < 3) {
+        d.adaptT = MIR_ADAPT_T;
+        const avgD = d.fDistN ? d.fDistSum / d.fDistN : 300;
+        d.fDistSum = 0; d.fDistN = 0;
+        const counter = avgD > MIR_KITE_D ? 'blink' : avgD < MIR_HUG_D ? 'repulse' : 'intercept';
+        if (!d.adapts.includes(counter)) d.adapts.push(counter);
+        else d.adapts.push(['blink', 'repulse', 'intercept'].find(c => !d.adapts.includes(c)) || counter);
+        d.cdMul *= 0.85;   // and it gets FASTER. every time.
+        G.bossBanner = d.adapts.length >= 3
+          ? { name: 'FINAL FORM', sub: 'IT IS MORE YOU THAN YOU', life: 2.2, max: 2.2 }
+          : { name: 'IT ADAPTS', sub: { blink: 'NOWHERE TO KITE', repulse: 'NOWHERE TO HIDE', intercept: 'IT READS YOUR DASH' }[counter], life: 2.0, max: 2.0 };
+        e.flash = 1; sfx('boss');
+      }
+      if (d.adapts.includes('blink')) {
+        d.blinkT -= dt;
+        if (d.blinkT <= 0) {
+          d.blinkT = MIR_BLINK_CD * d.cdMul;
+          const a = angTo(player.x, player.y, e.x, e.y) + Math.PI + rand(-0.7, 0.7);
+          const lim = ARENA / 2 - e.r;
+          e.x = clamp(player.x + Math.cos(a) * 240, -lim, lim);
+          e.y = clamp(player.y + Math.sin(a) * 240, -lim, lim);
+          for (let i = 0; i < 12; i++) spawnParticle(e.x, e.y, rand(-180, 180), rand(-180, 180), 0.3, 3, MA, 'spark');
+          sfx('dash');
+        }
+      }
+      if (d.adapts.includes('repulse')) {
+        d.repT -= dt;
+        if (d.repT <= 0 && dist(e.x, e.y, player.x, player.y) < 220) {
+          d.repT = MIR_REPULSE_CD * d.cdMul;
+          spawnRing(e.x, e.y, 16, 240, 0.4, MA);
+          hurtPlayer(e.dmg * 0.7, e.x, e.y);
+          const a = angTo(e.x, e.y, player.x, player.y);
+          player.vx += Math.cos(a) * 700; player.vy += Math.sin(a) * 700;
+          sfx('nova');
+        }
+      }
+      if (d.adapts.includes('intercept')) {
+        d.intT -= dt;
+        if (d.intT <= 0) {
+          d.intT = MIR_INT_CD * d.cdMul;
+          const pa = (player.vx || player.vy) ? Math.atan2(player.vy, player.vx) : player.aim;
+          const ix = player.x + Math.cos(pa) * 260, iy = player.y + Math.sin(pa) * 260;
+          addTelegraph({ kind: 'zone', x: ix, y: iy, r: MIR_INT_R, dur: MIR_INT_TELE, color: WH });
+          d.ints.push({ x: ix, y: iy, t: MIR_INT_TELE });
+        }
+      }
+      tickZoneList(d.ints, dt, MIR_INT_R, e);
+    },
+    onPhase(e, ph) {
+      const d = e.data;
+      if (ph === 1 && d) d.adaptT = 0.01;   // wounding it triggers an adaptation NOW
+      floater(e.x, e.y - e.r - 40, ['', 'IT SHARPENS', 'TWO REFLECTIONS'][Math.min(ph, 2)], MA, 24);
+      bossRing(e, 18 + ph * 8, 200, B_BULLET, rand(0, TAU), MA);
+    },
+    draw(e) {
+      const d = e.data; if (!d) return;
+      const t = G.time;
+      const drawHull = (x, y, ang, scale, col, alpha) => {
+        ctx.save(); ctx.translate(x, y); ctx.rotate(ang); ctx.scale(scale, scale);
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = rgba(col, 0.85); ctx.strokeStyle = rgba(WH, 0.9); ctx.lineWidth = 2 / scale;
+        ctx.beginPath(); ctx.moveTo(16, 0); ctx.lineTo(-11, 10); ctx.lineTo(-6, 0); ctx.lineTo(-11, -10);
+        ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.restore(); ctx.globalAlpha = 1;
+      };
+      const aim = angTo(e.x, e.y, player.x, player.y);
+      glow(e.x, e.y, e.r * 1.6, MA, 0.55);
+      // chromatic evil-twin ghosting (your ship, wrong colors, too big)
+      const off = 3 + Math.sin(t * 7) * 2;
+      drawHull(e.x - off, e.y, aim, 2.3, RD, 0.35);
+      drawHull(e.x + off, e.y, aim, 2.3, CY, 0.35);
+      drawHull(e.x, e.y, aim, 2.3, MA, 0.95);
+      // the crack
+      ctx.strokeStyle = rgba(WH, 0.8); ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(e.x - 14, e.y - 12); ctx.lineTo(e.x - 2, e.y - 2);
+      ctx.lineTo(e.x - 10, e.y + 4); ctx.moveTo(e.x - 2, e.y - 2); ctx.lineTo(e.x + 8, e.y + 10); ctx.stroke();
+      // shard veil
+      for (let k = 0; k < 6; k++) {
+        const a = d.bladeA * 1.4 + k / 6 * TAU;
+        const sx2 = e.x + Math.cos(a) * (e.r + 18), sy2 = e.y + Math.sin(a) * (e.r + 18);
+        ctx.strokeStyle = rgba(WH, 0.7); ctx.lineWidth = 1.5;
+        poly(sx2, sy2, 5, 3, a + t * 2); ctx.stroke();
+      }
+      if (d.style === 'blades') for (let k = 0; k < MIR_BLADE_N; k++) {
+        const a = d.bladeA + k / MIR_BLADE_N * TAU;
+        glow(e.x + Math.cos(a) * MIR_BLADE_R, e.y + Math.sin(a) * MIR_BLADE_R, 9, MA, 0.85);
+      }
+      // the second reflection (phase 3): always on your OTHER side
+      if (e.phase >= 2 && d.ex2 !== undefined)
+        drawHull(d.ex2, d.ey2, angTo(d.ex2, d.ey2, player.x, player.y), 2.3, PU, 0.4);
     },
   },
 
@@ -4675,6 +4895,15 @@ function update(dt) {
   player.x += player.vx * dt; player.y += player.vy * dt;
   const lim = ARENA / 2 - player.r;
   player.x = clamp(player.x, -lim, lim); player.y = clamp(player.y, -lim, lim);
+  // B4 MIRROR intel: sample how fast you actually travel (it learns)
+  if (G.mirrorIntel) {
+    G.intelT = (G.intelT || 0) - dt;
+    if (G.intelT <= 0) {
+      G.intelT = 0.5;
+      G.mirrorIntel.moveSum += Math.hypot(player.vx, player.vy);
+      G.mirrorIntel.moveN++;
+    }
+  }
   // C6 Spore Wake: the toxic trail ticks enemies that cross it
   if (G.spores && G.spores.length) {
     for (let i = G.spores.length - 1; i >= 0; i--) {
@@ -5414,6 +5643,7 @@ function startGame() {
     pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: FIRST_BOSS_AT, bossNum: 0, bossBag: [], bossBanner: null, bossTier: 0,
     dirIntensity: 1, dirStress: 0, dirKps: 0, dirDps: 0, spawnRamp: 1,
     glyphs: {}, glyphCount: 0, sigil: 0, ritual: null, sigilUI: null, lvUnlockAt: null,
+    mirrorIntel: { dashes: 0, moveSum: 0, moveN: 0 },   // B4: MIRROR has been watching since spawn
     dashZoom: 0, trail: [], spores: [], focusTarget: null, dmgDir: null,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });

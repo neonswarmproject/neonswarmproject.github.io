@@ -4,6 +4,28 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v3.9 — 2026-06-12 — MIRROR (new roster boss)
+
+It has been watching since the run began.
+
+- **Run-long learning:** it counts your dashes, samples your real travel
+  speed, and reads your highest-level weapon. At spawn it announces what it
+  copied — it moves at YOUR average speed +8%, dashes at YOUR cadence
+  (leaving your own ghost trail), and fights with a boss-grade version of
+  your best weapon family (volleys / locked lances / orbiting blades /
+  point-blank novas / homing seekers).
+- **Shard veil** (its own ability): periodic glass-shard fans.
+- **Mid-duel adaptation:** every 12s of a dragging fight it reads how you're
+  fighting and counters — kiting grants it flank BLINKS, face-tanking grants
+  repulse novas, everything else gets dash-INTERCEPT zones pre-fired along
+  your velocity. Every adaptation also makes it 15% faster. Three stacks =
+  "FINAL FORM: it is more you than you". Wounding it into phase 2 triggers
+  an adaptation instantly.
+- **Phase 3 — two reflections:** a second half-real copy mirrors your
+  position from the opposite side and echoes the shard fans.
+- Drawn as your own hull ×2.3 with chromatic ghosting and a crack down the
+  plating. Drops a Long Dash. Glyph #10 joins the ritual.
+
 ## v3.8 — 2026-06-12 — OBELISK (new roster boss)
 
 The monolith that owns the ground. It never walks — it makes walking YOUR

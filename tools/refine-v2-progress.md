@@ -86,10 +86,11 @@ for every tunable. Zero console errors desktop + mobile.
       awakening), sector slams, repulse→gap-ring trap, shield pylons (archnode
       reuse, die with boss), telegraphed relocation, eye-opening phase 3 with
       lighthouse mega-beam; glyph #9
-- [ ] B4 MIRROR — LEARNS from the player from spawn until the fight (weapons,
-      movement, habits), fights as an improved copy with its own abilities;
-      if the fight drags it adapts to counter the player's patterns, forcing
-      an aggressive escalating duel; relic
+- [x] B4 MIRROR (v3.9): run-long intel (dash count, avg speed, top weapon) →
+      improved copy (speed+8%, your dash cadence + your trail, boss-grade
+      version of your weapon family); shard veil; 12s adaptation loop with
+      kite/hug/dash counters + 15% speedup each; phase-3 second reflection;
+      glyph #10
 - [ ] B5 NEXUS — portal/network boss, Architect-grade; relic
 - [ ] B6 Full relic set → summon THE ARCHITECT at will (extend the existing
       glyph/sigil ritual to the grown roster)
