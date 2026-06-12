@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '3.7';
+const VERSION = '3.8';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -643,9 +643,14 @@ function tryDash() {
     spawnParticle(player.x, player.y, -d.x * rand(40, 160) + rand(-40, 40), -d.y * rand(40, 160) + rand(-40, 40), rand(0.2, 0.4), rand(2, 4), CY, 'spark');
 }
 
+// Dev/test switches (exposed as NEON.debug): god = hurtPlayer no-ops,
+// autoCards = level-ups resolve instantly with the first card.
+const DEBUG = { god: false, autoCards: false };
+
 const DMG_IND_T = 0.6;        // s the directional damage indicator stays up (Section L)
 const FIRST_RUN_HINT_T = 14;  // s the first-run hint line stays on screen (Section L)
 function hurtPlayer(dmg, srcX, srcY) {
+  if (DEBUG.god) return;
   if (player.invuln > 0 || player.dashTime > 0 || G.state !== 'playing') return;
   const real = Math.max(1, dmg - player.stats.armor);
   player.hp -= real;
@@ -1992,6 +1997,11 @@ function doReroll() {
 btnReroll.addEventListener('click', doReroll);
 
 function openLevelUp() {
+  if (DEBUG.autoCards) {            // test harness: resolve instantly
+    while (G.pendingLevels > 0) { applyChoice(buildChoices()[0]); G.pendingLevels--; }
+    if (G.state === 'levelup') { hideOverlays(); G.state = 'playing'; }
+    return;
+  }
   G.state = 'levelup';
   G.choices = buildChoices();
   renderCards();
@@ -2225,7 +2235,7 @@ function director(dt) {
    suppresses normal spawns and sweeps the arena on arrival; when the bag
    refills, bossTier++ and bosses return stronger.
    ========================================================================= */
-const BOSS_IDS = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden', 'trinity', 'leviathan'];
+const BOSS_IDS = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden', 'trinity', 'leviathan', 'obelisk'];
 // v2 boss-rush: a shuffled bag picks the next boss — no repeats within a cycle
 // and OVERLORD has no guaranteed intro slot. Scaling comes from ELAPSED TIME +
 // completed cycles (tier), never a per-boss difficulty rank, so a "hard" boss
@@ -2470,6 +2480,16 @@ const LEV_GATE_ARC = 0.55;                         // rad half-width of the whit
 const LEV_CONSTRICT_T = 0.5, LEV_CONSTRICT_R = 150;
 const LEV_DIVE_CD = 8, LEV_DIVE_TRACK = 1.6, LEV_DIVE_ERUPT_R = 170;
 const LEV_SPINE_CD = 4.2, LEV_SPINE_SPD = 240;     // phase 3: body sheds spines
+// B3 (v3.8) OBELISK — the monolith. Immobile arena control: rotating stone
+// lattice, sector slams, repulse pulses into gap rings, shield pylons.
+const OBE_LAT_N = 4, OBE_LAT_LEN = 420, OBE_LAT_W = 18, OBE_LAT_SPIN = 0.35;
+const OBE_SLAM_CD = 5.5, OBE_SLAM_TELE = 1.1, OBE_SLAM_R = 130, OBE_SLAM_N = 3;
+const OBE_REPULSE_CD = 7, OBE_REPULSE_TELE = 0.9, OBE_REPULSE_R = 460, OBE_REPULSE_PUSH = 720, OBE_REPULSE_T = 0.35;
+const OBE_RING_N = 36, OBE_RING_GAP = 5, OBE_RING_SPD = 170;
+const OBE_PYLON_N = 3, OBE_PYLON_HP = 700, OBE_SHIELD = 0.45;
+const OBE_RELOC_CD = 12, OBE_RELOC_TELE = 1.0, OBE_RELOC_FAR = 900;
+const OBE_MEGA_W = 34, OBE_MEGA_SPIN = 0.22, OBE_MEGA_LEN = 1000;
+const OBE_FLIP_CD_MIN = 3, OBE_FLIP_CD_MAX = 5, OBE_FLIP_WARN = 0.4;
 
 /* ---- THE ARCHITECT (Section D): voluntary super-boss. Fixed, brutal stats —
    deliberately NOT touched by the adaptive director or build scaling. ---- */
@@ -3340,6 +3360,205 @@ const BOSSES = {
     },
   },
 
+  /* ---- SLOT 8 (B3, v3.8): OBELISK — the monolith that owns the ground ---- */
+  obelisk: {
+    id: 'obelisk', name: 'OBELISK', color: OR, r: 64, speed: 0, hpMul: 1.5,
+    drop: 'bomb', phaseThresholds: [0.7, 0.4],
+    update(e, dt) {
+      const d = e.data;
+      if (!d.init) {
+        d.init = true;
+        d.latA = rand(0, TAU); d.latDir = 1;
+        d.slamCD = OBE_SLAM_CD * 0.7; d.slams = [];
+        d.repCD = OBE_REPULSE_CD; d.repT = 0; d.repTele = 0;
+        d.relocCD = OBE_RELOC_CD; d.mode = 'stand';
+        d.megaA = rand(0, TAU);
+        d.pylons = []; d.pylonPhase = -1;
+      }
+      e.vx = e.vy = 0;
+      const awake = e.phase >= 2;
+
+      // RELOCATE: sink, telegraph near the player, erupt back up
+      if (d.mode === 'stand') {
+        d.relocCD -= dt;
+        const far = dist(e.x, e.y, player.x, player.y) > OBE_RELOC_FAR;
+        if (d.relocCD <= 0 || far) {
+          d.mode = 'sink'; d.modeT = 0.5;
+          e.intangible = 0.5 + OBE_RELOC_TELE + 0.2;
+          for (let i = 0; i < 18; i++) spawnParticle(e.x, e.y + e.r, rand(-120, 120), rand(-40, -160), 0.5, 4, OR, 'spark');
+          sfx('dash');
+        }
+      } else if (d.mode === 'sink') {
+        d.modeT -= dt;
+        if (d.modeT <= 0) {
+          const a = rand(0, TAU), rr = rand(220, 380), lim = ARENA / 2 - e.r - 40;
+          d.nx = clamp(player.x + Math.cos(a) * rr, -lim, lim);
+          d.ny = clamp(player.y + Math.sin(a) * rr, -lim, lim);
+          addTelegraph({ kind: 'zone', x: d.nx, y: d.ny, r: e.r * 1.6, dur: OBE_RELOC_TELE, color: OR });
+          d.mode = 'rise'; d.modeT = OBE_RELOC_TELE;
+        }
+      } else if (d.mode === 'rise') {
+        d.modeT -= dt;
+        if (d.modeT <= 0) {
+          e.x = d.nx; e.y = d.ny;
+          d.mode = 'stand'; d.relocCD = OBE_RELOC_CD;
+          spawnRing(e.x, e.y, 22, e.r * 2.6, 0.5, OR);
+          G.shake = Math.min(1, G.shake + 0.6); G.hitstop = Math.max(G.hitstop, 0.06);
+          sfx('bigExplode');
+        }
+        return;   // no attacks while underground
+      }
+      if (d.mode === 'sink') return;
+
+      // ROTATING LATTICE — slow stone beams; awakening speeds and reverses them
+      if (awake) {
+        d.flipT = (d.flipT ?? rand(OBE_FLIP_CD_MIN, OBE_FLIP_CD_MAX)) - dt;
+        if (d.flipT <= 0) { d.flipT = rand(OBE_FLIP_CD_MIN, OBE_FLIP_CD_MAX); d.latDir *= -1; e.flash = 1; sfx('zap'); }
+      }
+      const latWarn = awake && d.flipT !== undefined && d.flipT < OBE_FLIP_WARN;
+      d.latA += OBE_LAT_SPIN * (awake ? 1.8 : 1) * d.latDir * dt;
+      for (let k = 0; k < OBE_LAT_N; k++) {
+        const a = d.latA + k / OBE_LAT_N * TAU;
+        const x1 = e.x + Math.cos(a) * (e.r + 6), y1 = e.y + Math.sin(a) * (e.r + 6);
+        const x2 = e.x + Math.cos(a) * (e.r + OBE_LAT_LEN), y2 = e.y + Math.sin(a) * (e.r + OBE_LAT_LEN);
+        G.beams.push({ x1, y1, x2, y2, w: OBE_LAT_W, life: 0.05, max: 0.05, color: latWarn ? WH : OR });
+        if (!latWarn && segDist(x1, y1, x2, y2, player.x, player.y) < OBE_LAT_W / 2 + player.r)
+          hurtPlayer(e.dmg * 0.7, (x1 + x2) / 2, (y1 + y2) / 2);
+      }
+      // SECTOR SLAMS — telegraphed detonations thrown at your sector
+      d.slamCD -= dt;
+      if (d.slamCD <= 0) {
+        d.slamCD = OBE_SLAM_CD * (awake ? 0.75 : 1);
+        const n = OBE_SLAM_N + (awake ? 2 : 0);
+        for (let k = 0; k < n; k++) {
+          const zx = player.x + rand(-260, 260), zy = player.y + rand(-260, 260);
+          d.slams.push({ x: zx, y: zy, t: OBE_SLAM_TELE });
+          addTelegraph({ kind: 'zone', x: zx, y: zy, r: OBE_SLAM_R, dur: OBE_SLAM_TELE, color: OR });
+        }
+        sfx('zap');
+      }
+      tickZoneList(d.slams, dt, OBE_SLAM_R, e);
+      // REPULSE (phase 2+): imploding warn ring, outward shove, then a gap
+      // ring you get shoved INTO unless you fight back inward
+      if (e.phase >= 1) {
+        if (d.repT <= 0 && d.repTele <= 0) {
+          d.repCD -= dt;
+          if (d.repCD <= 0) {
+            d.repCD = OBE_REPULSE_CD; d.repTele = OBE_REPULSE_TELE;
+            addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: OBE_REPULSE_R, dur: OBE_REPULSE_TELE, color: YE });
+          }
+        }
+        if (d.repTele > 0) {
+          d.repTele -= dt;
+          if (Math.random() < 0.5) {
+            const a = rand(0, TAU);
+            spawnParticle(e.x + Math.cos(a) * OBE_REPULSE_R, e.y + Math.sin(a) * OBE_REPULSE_R, -Math.cos(a) * 260, -Math.sin(a) * 260, 0.35, 3, YE, 'spark');
+          }
+          if (d.repTele <= 0) {
+            d.repT = OBE_REPULSE_T;
+            spawnRing(e.x, e.y, 30, OBE_REPULSE_R, 0.5, YE);
+            const gap = (Math.random() * OBE_RING_N) | 0;
+            for (let k = 0; k < OBE_RING_N; k++) {
+              if ((k - gap + OBE_RING_N) % OBE_RING_N < OBE_RING_GAP) continue;
+              const a = k / OBE_RING_N * TAU;
+              spawnEnemyProjectile(e.x + Math.cos(a) * OBE_REPULSE_R, e.y + Math.sin(a) * OBE_REPULSE_R,
+                Math.cos(a) * OBE_RING_SPD, Math.sin(a) * OBE_RING_SPD, e.dmg * B_BULLET, OR, { r: 7, arm: 0.2 });
+            }
+            G.shake = Math.min(1, G.shake + 0.5); sfx('nova');
+          }
+        }
+        if (d.repT > 0) {
+          d.repT -= dt;
+          const gd = dist(player.x, player.y, e.x, e.y);
+          if (gd < OBE_REPULSE_R) {
+            const ga = angTo(e.x, e.y, player.x, player.y), lim = ARENA / 2 - player.r;
+            player.x = clamp(player.x + Math.cos(ga) * OBE_REPULSE_PUSH * dt, -lim, lim);
+            player.y = clamp(player.y + Math.sin(ga) * OBE_REPULSE_PUSH * dt, -lim, lim);
+          }
+        }
+      }
+      // PYLONS (phase 2+): orbiting wards shield the monolith — break them first
+      if (e.phase >= 1 && d.pylonPhase < e.phase) {
+        d.pylonPhase = e.phase;
+        for (let k = 0; k < OBE_PYLON_N; k++) {
+          const n = spawnEnemy('archnode', e.x + 10, e.y, {
+            hp: OBE_PYLON_HP, maxHp: OBE_PYLON_HP, dmg: e.dmg * 0.6,
+            arch: e, orbA: k / OBE_PYLON_N * TAU, fireT: rand(0.5, 2), color: OR,
+          });
+          if (n) d.pylons.push(n);
+        }
+        floater(e.x, e.y - e.r - 30, 'WARDS RAISED', OR, 18);
+      }
+      e.shieldMul = d.pylons.some(n => !n.dead) ? OBE_SHIELD : null;
+      // AWAKENING (phase 3): the eye opens — a lighthouse mega-beam sweeps
+      if (awake) {
+        d.megaA += OBE_MEGA_SPIN * dt;
+        const x2 = e.x + Math.cos(d.megaA) * OBE_MEGA_LEN, y2 = e.y + Math.sin(d.megaA) * OBE_MEGA_LEN;
+        G.beams.push({ x1: e.x, y1: e.y, x2, y2, w: OBE_MEGA_W, life: 0.05, max: 0.05, color: WH });
+        if (segDist(e.x, e.y, x2, y2, player.x, player.y) < OBE_MEGA_W / 2 + player.r)
+          hurtPlayer(e.dmg * B_BEAM, e.x, e.y);
+      }
+    },
+    onPhase(e, ph) {
+      floater(e.x, e.y - e.r - 44, ['', 'WARDS RAISED', 'THE EYE OPENS'][Math.min(ph, 2)], OR, 24);
+      bossRing(e, 22 + ph * 8, 180, B_BULLET, rand(0, TAU), OR);
+    },
+    draw(e) {
+      const d = e.data, t = G.time;
+      if (d.mode === 'sink' || d.mode === 'rise') {
+        // underground: rumbling dust at the old and new sites
+        ctx.fillStyle = rgba(OR, 0.08);
+        ctx.beginPath(); ctx.ellipse(e.x, e.y + e.r * 0.6, e.r * 1.2, e.r * 0.4, 0, 0, TAU); ctx.fill();
+        return;
+      }
+      const awake = e.phase >= 2;
+      // ground shadow + rubble ring
+      ctx.fillStyle = rgba('#000', 0.35);
+      ctx.beginPath(); ctx.ellipse(e.x, e.y + e.r * 0.95, e.r * 1.15, e.r * 0.3, 0, 0, TAU); ctx.fill();
+      ctx.strokeStyle = rgba(OR, 0.25); ctx.lineWidth = 2;
+      for (let k = 0; k < 7; k++) {
+        const a = k / 7 * TAU + 0.4;
+        poly(e.x + Math.cos(a) * e.r * 1.25, e.y + e.r * 0.85 + Math.sin(a) * e.r * 0.18, 4 + (k % 3) * 2, 4, a); ctx.stroke();
+      }
+      // the monolith body (tapered slab)
+      glow(e.x, e.y, e.r * 1.5, OR, awake ? 0.6 : 0.4);
+      const w = e.r * 0.62, h = e.r * 1.25;
+      ctx.save(); ctx.translate(e.x, e.y);
+      ctx.fillStyle = rgba('#1a0e04', 0.92);
+      ctx.strokeStyle = rgba(OR, 0.95); ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      ctx.moveTo(-w * 0.7, h); ctx.lineTo(-w, -h * 0.55); ctx.lineTo(0, -h * 1.05);
+      ctx.lineTo(w, -h * 0.55); ctx.lineTo(w * 0.7, h); ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      // etched rune lines
+      ctx.strokeStyle = rgba(OR, 0.5 + 0.2 * Math.sin(t * 2)); ctx.lineWidth = 1.5;
+      for (let k = 0; k < 4; k++) {
+        const yy = h * 0.55 - k * h * 0.38;
+        ctx.beginPath(); ctx.moveTo(-w * 0.5, yy); ctx.lineTo(w * 0.5, yy); ctx.stroke();
+      }
+      // the EYE — closed slit until the awakening
+      const eyeY = -h * 0.55;
+      if (awake) {
+        const pulse = 0.7 + 0.3 * Math.sin(t * 6);
+        ctx.fillStyle = rgba(WH, pulse);
+        ctx.beginPath(); ctx.ellipse(0, eyeY, w * 0.42, w * 0.16 * (0.7 + 0.3 * pulse), 0, 0, TAU); ctx.fill();
+        glow(0, eyeY, w * 0.6, WH, 0.9);
+      } else {
+        ctx.strokeStyle = rgba(YE, 0.8); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-w * 0.34, eyeY); ctx.lineTo(w * 0.34, eyeY); ctx.stroke();
+      }
+      ctx.restore();
+      // floating rune stones
+      for (let k = 0; k < 3; k++) {
+        const a = t * 0.8 + k / 3 * TAU;
+        const rx = e.x + Math.cos(a) * (e.r + 26), ry = e.y + Math.sin(a) * (e.r + 26) * 0.5 - e.r * 0.3;
+        ctx.strokeStyle = rgba(OR, 0.75); ctx.lineWidth = 1.5;
+        poly(rx, ry, 6, 3, a + t); ctx.stroke();
+        glow(rx, ry, 5, OR, 0.5);
+      }
+    },
+  },
+
   architect: {
     id: 'architect', name: 'THE ARCHITECT', color: PU, r: ARCH_R, speed: ARCH_SPEED, hpMul: 1,
     drop: 'ascendant', phaseThresholds: [0.8, 0.6, 0.4, 0.2],
@@ -4031,6 +4250,9 @@ function killEnemy(e, reward) {
       addCoins(BOSS_COINS_ARCH);
       floater(e.x, e.y - e.r - 30, '+' + BOSS_COINS_ARCH + ' ⬡', YE, 18);
     } else if (e.bdef) {
+      // any boss that raised node-units (e.g. OBELISK pylons) takes them down with it
+      if (e.data && Array.isArray(e.data.pylons))
+        for (const p of e.data.pylons) if (!p.dead) killEnemy(p, false);
       const bounty = BOSS_COINS_ROSTER + G.bossTier * BOSS_COINS_TIER;   // S2 coin bounty
       PROFILE.stats.bossKills++;
       addCoins(bounty);
@@ -5402,6 +5624,8 @@ showTitle();
 requestAnimationFrame(frame);
 
 // expose a tiny debug hook
-window.NEON = { G, player };
+// Debug/test surface (used by the Playwright verification harness; harmless
+// in production — scores are local and there is nothing to cheat but yourself)
+window.NEON = { G, player, debug: DEBUG };
 
 })();

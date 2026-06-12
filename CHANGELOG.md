@@ -4,6 +4,24 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v3.8 — 2026-06-12 — OBELISK (new roster boss)
+
+The monolith that owns the ground. It never walks — it makes walking YOUR
+problem:
+
+- **Rotating stone lattice:** four thick rune-bars orbit it slowly; move with
+  the rotation or get ground. The phase-3 **AWAKENING** speeds the lattice
+  ×1.8 and randomly REVERSES it (white-blink warning), and opens the eye —
+  a white lighthouse mega-beam sweeps the arena.
+- **Sector slams:** telegraphed detonations carpet your sector.
+- **REPULSE (phase 2+):** an imploding warn ring, then a shove that throws
+  you outward — straight into a gap ring of bullets collapsing inward.
+  Fight back toward the monolith or thread the gap.
+- **Wards (phase 2+):** orbiting pylons shield it (45% damage taken) — break
+  them first; fresh wards rise at the awakening. They fall with the boss.
+- **Relocation:** sinks underground and erupts near you on a telegraph, so
+  there is nowhere safe to camp. Drops a Bomb. Glyph #9 joins the ritual.
+
 ## v3.7 — 2026-06-12 — LEVIATHAN (new roster boss)
 
 A 14-segment serpent. Only the **HEAD** (white maw, yellow eyes) takes
