@@ -45,8 +45,11 @@ for every tunable. Zero console errors desktop + mobile.
       detonations w/ angular lead, sweep reversals (white-blink warn), led
       fans; HIVE: velocity-led walls + p2 crossfire, interceptor drones,
       resin slow puddles on predicted path; hpMul bumps 1.15/1.25
-- [ ] C5 Five NEW weapons, all late-game unlocks (gated by run progress, not
-      in the early card pool)
+- [x] C5 Five NEW late-game weapons (v2.8): Magnus Coil (charge railgun),
+      Aegis Loop (shot-eating arc + ripostes), Latch Wyrm (boss-shredding
+      latch drill), Temporal Echo (damage-echo bursts), Kinetic Verdict
+      (dash slam cone). unlock() gates + floater announcements + LATE TECH
+      card tag.
 - [ ] C6 Five NEW abilities, late-game unlocks — split super-dash into two
       (longer dash + shorter cooldown; damaging spore-trail dash) + invent
       three more in that spirit

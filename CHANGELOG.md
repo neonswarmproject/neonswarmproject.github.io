@@ -4,6 +4,29 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v2.8 — 2026-06-12 — Five late-game weapons
+
+New tech is gated out of the early card pool (`unlock()` per weapon: boss
+count with a time fallback) and announces itself with a floater when its gate
+opens. Cards show a "LATE TECH" tag.
+
+- **✛ Magnus Coil** (2 bosses / 5 min): charge-up railgun — locks an aim line,
+  charges visibly, then fires a screen-length piercing lance with hitstop.
+  Twin rails at high level.
+- **⛉ Aegis Loop** (3 bosses / 7 min): an energy arc orbits you, EATING enemy
+  projectiles it touches and answering each with an aimed riposte bolt. Up to
+  three arcs.
+- **⚙ Latch Wyrm** (2 bosses / 5 min): launches a drill that latches the
+  strongest target (focus > boss > beefiest) and grinds it with rapid ticks —
+  the boss-shredder answer to the new HP pools. Up to three drills; high
+  levels spray shrapnel into the crowd while grinding.
+- **◉ Temporal Echo** (3 bosses / 7 min): pulses mark foes; all damage a
+  marked foe takes in 1.4s is repeated as a burst (up to ~80% at max).
+  High level splashes bursts to neighbors.
+- **⬟ Kinetic Verdict** (4 bosses / 9 min): your DASH slams a shock cone into
+  the ground along the dash direction — aftershock and dash-end eruption at
+  high level. Built for the C6 dash-ability builds coming next.
+
 ## v2.7 — 2026-06-12 — PRISM & HIVE anti-orbit redesign
 
 Circling at a constant radius no longer beats either boss.

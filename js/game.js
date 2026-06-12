@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '2.7';
+const VERSION = '2.8';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -650,6 +650,16 @@ const FROST_DPS_BASE = 7;                     // was 5
 const WHIP_DMG_BASE = 24;                     // was 20
 const SENTRY_DMG_BASE = 13, SENTRY_LIFE_BASE = 7;  // was 10 / 6
 const FLAK_DMG_BASE = 11;                     // was 9
+
+// C5 (v2.8): five LATE-GAME weapons — locked out of the early card pool, they
+// unlock as the run matures (boss count, with a time fallback) and announce
+// themselves with a floater. Tuned as answers to the late game: boss shredding,
+// bullet-hell defense, burst amplification, dash synergy.
+const RAIL_CD = 4.6, RAIL_CHARGE = 1.2, RAIL_LEN = 900, RAIL_W = 11, RAIL_DMG = 170;
+const REF_RAD = 70, REF_BAND = 22, REF_SPIN = 1.7, REF_RET_DMG = 9, REF_RET_SPD = 480, REF_MAX_EAT = 4;
+const DRILL_CD = 3.8, DRILL_ACQ = 700, DRILL_SPD = 520, DRILL_DPS = 46, DRILL_DUR = 2.6, DRILL_TICK = 0.15;
+const ECHO_CD = 3.2, ECHO_R = 250, ECHO_WIN = 1.4, ECHO_FRAC = 0.35;
+const HAM_CD = 0.9, HAM_R = 210, HAM_HALF = 0.55, HAM_DMG = 60, HAM_KB = 320, HAM_AFTER_T = 0.35;
 
 const WEAPONS = {
   /* ---- Pulse Cannon : auto-targeting bolts ---- */
@@ -1301,6 +1311,359 @@ const WEAPONS = {
       for (const p of self.data.positions) glow(p.x, p.y, 14, MA, 0.85);
     }
   },
+
+  /* ======================================================================
+     C5 (v2.8) — five LATE-GAME weapons. Each carries an `unlock()` gate;
+     buildChoices() keeps them out of the card pool until it opens.
+     ====================================================================== */
+
+  /* ---- MAGNUS COIL : charge-up hypervelocity railgun ---- */
+  rail: {
+    name: 'Magnus Coil', icon: '✛', color: WH, max: 8,
+    unlock: () => G.bossNum >= 2 || G.time >= 300,
+    info(l) {
+      const m = ['Charges, then fires a piercing hypervelocity lance.',
+        '+45% damage.', 'Faster charge.', 'Wider rail &amp; +damage.',
+        'Shorter cooldown.', '+50% damage.', 'Twin rails.', 'OVERKILL: massive damage.'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      if (!self.data) self.data = { st: 'idle', t: 0, aim: 0 };
+      const d = self.data;
+      const cd = (RAIL_CD - (lv >= 5 ? 1.0 : 0)) / S().attackSpeedMul;
+      const chargeT = RAIL_CHARGE - (lv >= 3 ? 0.35 : 0);
+      if (d.st === 'idle') {
+        d.t -= dt;
+        if (d.t > 0) return;
+        const tgt = (G.focusTarget && !G.focusTarget.dead) ? G.focusTarget : nearestEnemy(player.x, player.y, RAIL_LEN * WRANGE);
+        if (!tgt) { d.t = 0.2; return; }
+        d.st = 'charge'; d.t = chargeT;
+        d.aim = angTo(player.x, player.y, tgt.x, tgt.y);
+        sfx('laser');
+      } else {
+        d.t -= dt;
+        // charge sparks crawl toward the muzzle
+        if (Math.random() < 0.5) {
+          const a = rand(0, TAU), rr = rand(20, 46);
+          spawnParticle(player.x + Math.cos(a) * rr, player.y + Math.sin(a) * rr,
+            -Math.cos(a) * 120, -Math.sin(a) * 120, 0.18, 2, WH, 'spark');
+        }
+        if (d.t > 0) return;
+        d.st = 'idle'; d.t = cd;
+        const len = RAIL_LEN * S().areaMul * WRANGE;
+        const wid = (RAIL_W + (lv >= 4 ? 6 : 0)) * Math.sqrt(S().areaMul);
+        const dmg = RAIL_DMG * (1 + (lv >= 2 ? 0.45 : 0) + (lv >= 4 ? 0.45 : 0) + (lv >= 6 ? 0.5 : 0) + (lv >= 8 ? 1.0 : 0)) * S().damageMul;
+        const rails = 1 + (lv >= 7 ? 1 : 0);
+        for (let b = 0; b < rails; b++) {
+          const a = d.aim + (b - (rails - 1) / 2) * 0.09;
+          const ex = player.x + Math.cos(a) * len, ey = player.y + Math.sin(a) * len;
+          grid.query((player.x + ex) / 2, (player.y + ey) / 2, len / 2 + 60, _wq);
+          for (let i = 0; i < _wq.length; i++) {
+            const e = _wq[i]; if (e.dead) continue;
+            if (segDist(player.x, player.y, ex, ey, e.x, e.y) < wid / 2 + e.r)
+              damageEnemy(e, dmg, { kbx: Math.cos(a), kby: Math.sin(a), kb: 220, color: WH });
+          }
+          G.beams.push({ x1: player.x, y1: player.y, x2: ex, y2: ey, w: wid + 6, life: 0.22, max: 0.22, color: WH });
+          G.beams.push({ x1: player.x, y1: player.y, x2: ex, y2: ey, w: wid * 0.4, life: 0.3, max: 0.3, color: CY });
+        }
+        G.hitstop = Math.max(G.hitstop, 0.05);
+        G.shake = Math.min(1, G.shake + 0.35);
+        sfx('bigExplode');
+      }
+    },
+    draw(self) {
+      const d = self.data;
+      if (!d || d.st !== 'charge') return;
+      const p = 1 - d.t / Math.max(0.01, RAIL_CHARGE - (self.level >= 3 ? 0.35 : 0));
+      const len = RAIL_LEN * S().areaMul * WRANGE;
+      const ex = player.x + Math.cos(d.aim) * len, ey = player.y + Math.sin(d.aim) * len;
+      ctx.strokeStyle = rgba(WH, 0.12 + 0.3 * p); ctx.lineWidth = 1.5 + p * 2;
+      ctx.setLineDash([6, 10]);
+      ctx.beginPath(); ctx.moveTo(player.x, player.y); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.setLineDash([]);
+      glow(player.x, player.y, 14 + p * 22, WH, 0.4 + 0.5 * p);
+    }
+  },
+
+  /* ---- AEGIS LOOP : orbiting arc that eats enemy shots and ripostes ---- */
+  reflector: {
+    name: 'Aegis Loop', icon: '⛉', color: BL, max: 8,
+    unlock: () => G.bossNum >= 3 || G.time >= 420,
+    info(l) {
+      const m = ['An energy arc orbits you, eating enemy shots and striking back.',
+        'Wider arc.', 'Stronger ripostes.', 'Faster orbit.',
+        'A second arc (opposite side).', '+riposte damage.', 'Wider arcs.', 'PERFECT GUARD: a third arc.'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      if (!self.data) self.data = { ang: 0 };
+      const d = self.data;
+      const arcs = 1 + (lv >= 5 ? 1 : 0) + (lv >= 8 ? 1 : 0);
+      const half = 0.5 + (lv >= 2 ? 0.18 : 0) + (lv >= 7 ? 0.2 : 0);
+      const spin = REF_SPIN * (1 + (lv >= 4 ? 0.5 : 0)) * S().attackSpeedMul;
+      const ret = (REF_RET_DMG + (lv >= 3 ? 5 : 0) + (lv >= 6 ? 7 : 0)) * S().damageMul;
+      const rad = REF_RAD * Math.sqrt(S().areaMul) * WRANGE;
+      d.ang += spin * dt;
+      d.arcs = arcs; d.half = half; d.rad = rad;
+      let eaten = 0;
+      for (let i = G.eProj.length - 1; i >= 0 && eaten < REF_MAX_EAT; i--) {
+        const p = G.eProj[i];
+        if (p.arm > 0) continue;                      // telegraphed shots aren't live yet
+        const dd = dist(p.x, p.y, player.x, player.y);
+        if (Math.abs(dd - rad) > REF_BAND + (p.r || 5)) continue;
+        const pa = angTo(player.x, player.y, p.x, p.y);
+        let hitArc = false;
+        for (let k = 0; k < arcs; k++) {
+          let da = pa - (d.ang + k / arcs * TAU);
+          while (da > Math.PI) da -= TAU; while (da < -Math.PI) da += TAU;
+          if (Math.abs(da) <= half) { hitArc = true; break; }
+        }
+        if (!hitArc) continue;
+        G.eProj.splice(i, 1); eaten++;
+        spawnParticle(p.x, p.y, rand(-80, 80), rand(-80, 80), 0.2, 3, BL, 'spark');
+        const tgt = nearestEnemy(p.x, p.y, 600 * WRANGE);
+        if (tgt) {
+          const a = angTo(p.x, p.y, tgt.x, tgt.y);
+          firePlayerProjectile({ x: p.x, y: p.y, vx: Math.cos(a) * REF_RET_SPD, vy: Math.sin(a) * REF_RET_SPD,
+            r: 4, dmg: ret, pierce: 0, life: 0.9 * WRANGE, color: BL, hit: new Set(), trail: 1 });
+        }
+        if (Math.random() < 0.3) sfx('hit');
+      }
+    },
+    draw(self) {
+      const d = self.data;
+      if (!d || !d.rad) return;
+      for (let k = 0; k < (d.arcs || 1); k++) {
+        const a0 = d.ang + k / (d.arcs || 1) * TAU;
+        ctx.strokeStyle = rgba(BL, 0.85); ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.arc(player.x, player.y, d.rad, a0 - d.half, a0 + d.half); ctx.stroke();
+        ctx.strokeStyle = rgba(WH, 0.5); ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(player.x, player.y, d.rad, a0 - d.half, a0 + d.half); ctx.stroke();
+        glow(player.x + Math.cos(a0) * d.rad, player.y + Math.sin(a0) * d.rad, 10, BL, 0.7);
+      }
+    }
+  },
+
+  /* ---- LATCH WYRM : drill that latches the strongest foe and grinds ---- */
+  drill: {
+    name: 'Latch Wyrm', icon: '⚙', color: OR, max: 8,
+    unlock: () => G.bossNum >= 2 || G.time >= 300,
+    info(l) {
+      const m = ['Launches a drill that latches the strongest foe and grinds it.',
+        '+45% grind speed.', 'Longer grind.', 'A second drill.',
+        '+grind speed.', 'Grinding sprays shrapnel at nearby foes.', 'A third drill.', 'APEX PREDATOR: savage grind speed.'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      if (!self.data) self.data = { drills: [], t: 0 };
+      const d = self.data;
+      const dps = DRILL_DPS * (1 + (lv >= 2 ? 0.45 : 0) + (lv >= 5 ? 0.45 : 0) + (lv >= 8 ? 0.9 : 0)) * S().damageMul;
+      const dur = DRILL_DUR + (lv >= 3 ? 1.0 : 0);
+      const maxDr = 1 + (lv >= 4 ? 1 : 0) + (lv >= 7 ? 1 : 0);
+      const spray = lv >= 6;
+      const acq = DRILL_ACQ * WRANGE;
+      d.t -= dt;
+      if (d.t <= 0 && d.drills.length < maxDr) {
+        // strongest target: focus > boss > beefiest enemy in range
+        let tgt = null;
+        if (G.focusTarget && !G.focusTarget.dead && dist2(player.x, player.y, G.focusTarget.x, G.focusTarget.y) < acq * acq) tgt = G.focusTarget;
+        else if (G.boss && !G.boss.dead && dist2(player.x, player.y, G.boss.x, G.boss.y) < acq * acq) tgt = G.boss;
+        else {
+          grid.query(player.x, player.y, acq, _wq);
+          let best = 0;
+          for (let i = 0; i < _wq.length; i++) {
+            const e = _wq[i];
+            if (e.dead || d.drills.some(dr => dr.target === e)) continue;
+            if (e.maxHp > best) { best = e.maxHp; tgt = e; }
+          }
+        }
+        if (tgt) {
+          d.t = (DRILL_CD) / S().attackSpeedMul;
+          const a = angTo(player.x, player.y, tgt.x, tgt.y);
+          d.drills.push({ x: player.x, y: player.y, vx: Math.cos(a) * DRILL_SPD, vy: Math.sin(a) * DRILL_SPD,
+            target: tgt, latched: false, life: dur, tick: 0, spin: rand(0, TAU) });
+          sfx('shoot');
+        } else d.t = 0.25;
+      }
+      for (let i = d.drills.length - 1; i >= 0; i--) {
+        const dr = d.drills[i];
+        const t = dr.target;
+        if (!t || t.dead) {            // target gone: pop the drill
+          spawnParticle(dr.x, dr.y, rand(-120, 120), rand(-120, 120), 0.3, 3, OR, 'spark');
+          d.drills.splice(i, 1); continue;
+        }
+        if (!dr.latched) {
+          const a = angTo(dr.x, dr.y, t.x, t.y);
+          const spd = DRILL_SPD * S().projSpeedMul;
+          dr.vx = Math.cos(a) * spd; dr.vy = Math.sin(a) * spd;
+          dr.x += dr.vx * dt; dr.y += dr.vy * dt;
+          if (dist2(dr.x, dr.y, t.x, t.y) < (t.r + 12) ** 2) {
+            dr.latched = true;
+            const la = angTo(t.x, t.y, dr.x, dr.y);
+            dr.offA = la; dr.offR = t.r * 0.7;
+            sfx('hit');
+          }
+          continue;
+        }
+        dr.life -= dt; dr.spin += dt * 18;
+        dr.x = t.x + Math.cos(dr.offA) * dr.offR;
+        dr.y = t.y + Math.sin(dr.offA) * dr.offR;
+        dr.tick -= dt;
+        if (dr.tick <= 0) {
+          dr.tick = DRILL_TICK;
+          damageEnemy(t, dps * DRILL_TICK, { silent: true, color: OR });
+          spawnParticle(dr.x, dr.y, rand(-160, 160), rand(-160, 160), 0.22, 2.5, OR, 'spark');
+          if (spray) {
+            grid.query(t.x, t.y, 100, _wq2);
+            for (let j = 0; j < _wq2.length; j++) {
+              const o = _wq2[j];
+              if (o.dead || o === t) continue;
+              if (dist2(t.x, t.y, o.x, o.y) < (100 + o.r) ** 2) damageEnemy(o, dps * DRILL_TICK * 0.3, { silent: true, color: OR });
+            }
+          }
+        }
+        if (dr.life <= 0) { d.drills.splice(i, 1); }
+      }
+    },
+    draw(self) {
+      if (!self.data) return;
+      for (const dr of self.data.drills) {
+        glow(dr.x, dr.y, 12, OR, 0.8);
+        ctx.strokeStyle = rgba(OR, 0.95); ctx.lineWidth = 2.5;
+        poly(dr.x, dr.y, 9, 3, dr.spin || 0); ctx.stroke();
+        ctx.strokeStyle = rgba(WH, 0.6); ctx.lineWidth = 1.5;
+        poly(dr.x, dr.y, 5, 3, -(dr.spin || 0) * 1.5); ctx.stroke();
+      }
+    }
+  },
+
+  /* ---- TEMPORAL ECHO : marks foes; damage they take repeats as a burst ---- */
+  echo: {
+    name: 'Temporal Echo', icon: '◉', color: PU, max: 8,
+    unlock: () => G.bossNum >= 3 || G.time >= 420,
+    info(l) {
+      const m = ['Pulses mark foes — damage they take is repeated as a burst.',
+        'Stronger echoes.', 'Wider pulse.', 'Faster pulses.',
+        'Stronger echoes.', 'Bursts splash to neighbors.', 'Wider pulse.', 'RESONANCE: echoes near-double the pain.'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      if (!self.data) self.data = { t: 0.5, marked: [] };
+      const d = self.data;
+      const frac = ECHO_FRAC + (lv >= 2 ? 0.08 : 0) + (lv >= 5 ? 0.09 : 0) + (lv >= 8 ? 0.28 : 0);
+      const R = (ECHO_R + (lv >= 3 ? 60 : 0) + (lv >= 7 ? 70 : 0)) * S().areaMul * WRANGE;
+      const cd = (ECHO_CD - (lv >= 4 ? 0.8 : 0)) / S().attackSpeedMul;
+      const splash = lv >= 6;
+      d.t -= dt;
+      if (d.t <= 0) {
+        d.t = cd;
+        G.particles.push({ x: player.x, y: player.y, vx: 0, vy: 0, r: 12, mr: R, life: 0.5, max: 0.5, color: PU, kind: 'ring' });
+        grid.query(player.x, player.y, R, _wq);
+        for (let i = 0; i < _wq.length; i++) {
+          const e = _wq[i];
+          if (e.dead || e.echoT > 0) continue;
+          if (dist2(player.x, player.y, e.x, e.y) < (R + e.r) ** 2) {
+            e.echoT = ECHO_WIN; e.echoAcc = 0;
+            d.marked.push(e);
+          }
+        }
+        sfx('zap');
+      }
+      for (let i = d.marked.length - 1; i >= 0; i--) {
+        const e = d.marked[i];
+        if (e.dead) { d.marked.splice(i, 1); continue; }
+        e.echoT -= dt;
+        if (e.echoT > 0) continue;
+        d.marked.splice(i, 1);
+        const burst = Math.round((e.echoAcc || 0) * frac);
+        e.echoAcc = 0;
+        if (burst <= 0) continue;
+        damageEnemy(e, burst, { echo: true, color: PU });
+        G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: 6, mr: 70, life: 0.35, max: 0.35, color: PU, kind: 'ring' });
+        if (splash) {
+          grid.query(e.x, e.y, 90, _wq2);
+          for (let j = 0; j < _wq2.length; j++) {
+            const o = _wq2[j];
+            if (o.dead || o === e) continue;
+            if (dist2(e.x, e.y, o.x, o.y) < (90 + o.r) ** 2) damageEnemy(o, Math.round(burst * 0.5), { echo: true, silent: true, color: PU });
+          }
+        }
+      }
+    },
+    draw(self) {
+      if (!self.data) return;
+      for (const e of self.data.marked) {
+        if (e.dead || e.echoT <= 0) continue;
+        ctx.strokeStyle = rgba(PU, 0.35 + 0.4 * (e.echoT / ECHO_WIN)); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 7 + Math.sin(G.time * 9) * 2, 0, TAU); ctx.stroke();
+      }
+    }
+  },
+
+  /* ---- KINETIC VERDICT : your dash slams a shock cone into the ground ---- */
+  hammer: {
+    name: 'Kinetic Verdict', icon: '⬟', color: YE, max: 8,
+    unlock: () => G.bossNum >= 4 || G.time >= 540,
+    info(l) {
+      const m = ['Your DASH slams the ground in a damaging shock cone.',
+        '+damage.', 'Wider cone.', '+damage &amp; knockback.',
+        'Aftershock: the cone hits twice.', '+damage.', 'Bigger cone.', 'SEISMIC: dash end erupts too.'];
+      return m[Math.min(l, m.length - 1)];
+    },
+    update(self, dt) {
+      const lv = self.level;
+      if (!self.data) self.data = { prevDash: 0, cd: 0, shocks: [] };
+      const d = self.data;
+      const dmg = HAM_DMG * (1 + (lv >= 2 ? 0.4 : 0) + (lv >= 4 ? 0.4 : 0) + (lv >= 6 ? 0.5 : 0)) * S().damageMul;
+      const half = HAM_HALF + (lv >= 3 ? 0.18 : 0) + (lv >= 7 ? 0.15 : 0);
+      const R = (HAM_R + (lv >= 7 ? 50 : 0)) * S().areaMul * WRANGE;
+      const kb = HAM_KB + (lv >= 4 ? 160 : 0);
+      d.cd -= dt;
+      const slam = (x, y, a, mul) => {
+        grid.query(x, y, R, _wq);
+        for (let i = 0; i < _wq.length; i++) {
+          const e = _wq[i]; if (e.dead) continue;
+          if (dist2(x, y, e.x, e.y) > (R + e.r) ** 2) continue;
+          let da = angTo(x, y, e.x, e.y) - a;
+          while (da > Math.PI) da -= TAU; while (da < -Math.PI) da += TAU;
+          if (Math.abs(da) <= half) damageEnemy(e, dmg * mul, { kbx: e.x - x, kby: e.y - y, kb: kb * mul, color: YE });
+        }
+        // crack visual: sparks fan out along the cone
+        for (let k = 0; k <= 8; k++) {
+          const aa = a - half + (k / 8) * half * 2;
+          spawnParticle(x + Math.cos(aa) * R * 0.4, y + Math.sin(aa) * R * 0.4,
+            Math.cos(aa) * 260, Math.sin(aa) * 260, 0.3, 3.5, YE, 'spark');
+        }
+        G.particles.push({ x, y, vx: 0, vy: 0, r: 10, mr: R * 0.8, life: 0.4, max: 0.4, color: YE, kind: 'ring' });
+        G.shake = Math.min(1, G.shake + 0.22 * mul);
+        sfx('nova');
+      };
+      // dash START edge -> slam along the dash direction
+      if (player.dashTime > 0 && d.prevDash <= 0 && d.cd <= 0 && G.state === 'playing') {
+        d.cd = HAM_CD;
+        const a = Math.atan2(player.dashDir.y, player.dashDir.x);
+        slam(player.x, player.y, a, 1);
+        if (lv >= 5) d.shocks.push({ x: player.x, y: player.y, a, t: HAM_AFTER_T });
+        d.wasDashing = true;
+      }
+      // dash END edge -> seismic eruption (lv 8)
+      if (lv >= 8 && d.prevDash > 0 && player.dashTime <= 0 && d.wasDashing) {
+        d.wasDashing = false;
+        const a = Math.atan2(player.dashDir.y, player.dashDir.x);
+        slam(player.x, player.y, a, 0.6);
+        slam(player.x, player.y, a + Math.PI, 0.6);
+      }
+      d.prevDash = player.dashTime;
+      for (let i = d.shocks.length - 1; i >= 0; i--) {
+        const s = d.shocks[i]; s.t -= dt;
+        if (s.t <= 0) { slam(s.x, s.y, s.a, 0.6); d.shocks.splice(i, 1); }
+      }
+    }
+  },
 };
 function segDist(x1, y1, x2, y2, px, py) {
   const dx = x2 - x1, dy = y2 - y1;
@@ -1355,8 +1718,12 @@ function buildChoices() {
   }
   // new weapons
   if (player.weapons.length < MAX_WEAPONS) {
-    for (const id of WEAPON_IDS) if (!hasWeapon(id))
+    for (const id of WEAPON_IDS) {
+      if (hasWeapon(id)) continue;
+      const def = WEAPONS[id];
+      if (def.unlock && !def.unlock()) continue;   // C5: late-game tech stays locked
       pool.push({ kind: 'weapon-new', id, weight: 9 + S().luck * 0.5 });
+    }
   }
   // passives
   for (const id of PASSIVE_IDS) {
@@ -1408,7 +1775,7 @@ function cardData(c) {
   // so pass newLevel-1. v1.x passed newLevel — every weapon card described the
   // NEXT level's bonus (the reported "card claims an extra ball, levels only
   // add area" bug). Fixed in v2.
-  if (c.kind === 'weapon-new') { const d = WEAPONS[c.id]; return { icon: d.icon, name: d.name, color: d.color, type: 'New Weapon', desc: d.info(0), level: 0, max: d.max, isNew: true }; }
+  if (c.kind === 'weapon-new') { const d = WEAPONS[c.id]; return { icon: d.icon, name: d.name, color: d.color, type: d.unlock ? 'New Weapon · LATE TECH' : 'New Weapon', desc: d.info(0), level: 0, max: d.max, isNew: true }; }
   if (c.kind === 'weapon-up')  { const d = WEAPONS[c.id]; const w = player.weapons.find(w => w.id === c.id); return { icon: d.icon, name: d.name, color: d.color, type: 'Weapon · Lv ' + (w.level + 1), desc: d.info(w.level), level: w.level, max: d.max }; }
   if (c.kind === 'passive')    { const d = PASSIVES[c.id]; const lv = player.passives[c.id] || 0; return { icon: d.icon, name: d.name, color: d.color, type: 'Passive · Lv ' + (lv + 1), desc: d.desc, level: lv, max: d.max }; }
   return { icon: '✨', name: 'Power Surge', color: WH, type: 'Bonus', desc: '+8% damage &amp; full heal.', level: 0, max: 0 };
@@ -1802,6 +2169,15 @@ function spawnBoss(forcedId) {
   addTelegraph({ kind: 'zone', x: p.x, y: p.y, r: def.r * 2.2, dur: BOSS_ENTRANCE_T, color: def.color });
   G.boss = e;
   G.bossNum++;
+  // C5: announce late-game weapon tech the moment its gate opens
+  G.wUnlocked = G.wUnlocked || {};
+  for (const wid of WEAPON_IDS) {
+    const wdef = WEAPONS[wid];
+    if (wdef.unlock && !G.wUnlocked[wid] && wdef.unlock()) {
+      G.wUnlocked[wid] = true;
+      floater(player.x, player.y - 70, wdef.icon + ' ' + wdef.name.toUpperCase() + ' — TECH UNLOCKED', wdef.color, 15);
+    }
+  }
   G.bossBanner = { name: e.name, sub: 'THE SWARM SCATTERS — DUEL BEGINS', life: BOSS_BANNER_T, max: BOSS_BANNER_T };
   sfx('boss');
   G.flash = 0.5; G.flashColor = def.color;
@@ -3078,6 +3454,7 @@ function damageEnemy(e, dmg, opts) {
   if (Math.random() < S().crit) { crit = true; dmg *= S().critMult; }
   dmg = Math.round(dmg);
   e.hp -= dmg;
+  if (e.echoT > 0 && !opts.echo) e.echoAcc = (e.echoAcc || 0) + dmg;  // C5: TEMPORAL ECHO records hits
   e.flash = 1;
   if (e.type === 'detonator' && e.hp <= 0) { armDetonator(e); e.hp = 1; return; } // bomber bursts instead of dying
   if (opts.kb) { const l = Math.hypot(opts.kbx, opts.kby) || 1; e.x += opts.kbx / l * opts.kb * 0.02; e.y += opts.kby / l * opts.kb * 0.02; e.vx += opts.kbx / l * opts.kb; e.vy += opts.kby / l * opts.kb; }
