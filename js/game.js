@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '4.3';
+const VERSION = '4.4';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -2227,6 +2227,14 @@ function director(dt) {
   // P1 (v4.3): POSTGAME rift tears — small surges of void-touched stragglers,
   // a gravity flicker at collapse, and the occasional manuscript page.
   if (G.postgame && !G.boss && !G.ritual && G.rifts) {
+    // P2: the rifts birth their own tyrants — herald and warden alternate
+    G.postBossT -= dt;
+    if (G.postBossT <= 0) {
+      G.postBossT = POST_BOSS_CD;
+      const pid = G.postBossNext || 'herald';
+      G.postBossNext = pid === 'herald' ? 'chrono' : 'herald';
+      spawnBoss(pid);
+    }
     G.riftT -= dt;
     if (G.riftT <= 0 && G.rifts.length < POST_RIFT_MAX) {
       G.riftT = POST_RIFT_CD;
@@ -2580,6 +2588,16 @@ const POST_RIFT_SPAWN_CD = 1.4, POST_RIFT_PULL = 130, POST_RIFT_PULL_R = 420;
 const POST_RIFT_MS_CHANCE = 0.22;  // chance a collapsing rift yields a manuscript
 const ARCH_MANUSCRIPTS = 3;        // the Architect's corpse yields pages
 const DEV_MANUSCRIPTS = 10;        // pages needed to summon THE DEVELOPER
+// P2 (v4.4) postgame bosses — fights inside other dimensions
+const POST_BOSS_CD = 75;           // s between postgame-boss rift events
+const HER_MOON_N = 3, HER_MOON_R = 130, HER_MOON_SPIN = 1.1;
+const HER_BEAM_CD = 5.5, HER_BEAM_TELE = 0.9, HER_BEAM_DUR = 1.4, HER_BEAM_W = 18, HER_BEAM_LEN = 900;
+const HER_RAIN_CD = 4.5, HER_RAIN_N = 10, HER_RAIN_TELE = 0.7, HER_RAIN_SPD = 300;
+const HER_DARK_CD = 9, HER_DARK_SPD = 120, HER_DARK_W = 150, HER_DARK_DPS = 26, HER_DARK_MAX = 700;
+const CHR_HAND_W = 14, CHR_HAND_LEN = 520, CHR_HAND_SPD1 = 0.5, CHR_HAND_SPD2 = 1.7;
+const CHR_TICK_CD = 4.6, CHR_TICK_TELE = 1.0, CHR_TICK_R = 150, CHR_TICK_N = 4, CHR_TICK_DIST = 260;
+const CHR_SNAP_CD = 5, CHR_REWIND_DMG = 0.06, CHR_REWIND_HEAL = 0.04, CHR_REWIND_MAX = 3;
+const CHR_FIELD_R = 500, CHR_FIELD_SLOW = 0.7;
 
 const BOSSES = {
   /* ---- SLOT 0: OVERLORD (intro) ---- */
@@ -4002,6 +4020,210 @@ const BOSSES = {
     },
   },
 
+  /* ---- P2 (v4.4) POSTGAME BOSS: HERALD OF THE VOID — fight in the dark ---- */
+  herald: {
+    id: 'herald', name: 'HERALD OF THE VOID', color: '#b18cff', r: 70, speed: 40, hpMul: 3.0,
+    drop: 'cleansave', phaseThresholds: [0.7, 0.4], manuscripts: 3, bounty: 25, dimension: 'void',
+    update(e, dt) {
+      const d = e.data, C = '#b18cff';
+      if (!d.init) {
+        d.init = true;
+        d.moonA = rand(0, TAU); d.beamCD = HER_BEAM_CD * 0.6; d.beams = null;
+        d.rainT = HER_RAIN_CD; d.darkT = HER_DARK_CD * 0.7; d.dark = null;
+        G.dimension = 'void';
+        G.bossBanner = { name: 'YOU ARE PULLED THROUGH', sub: 'THE VOID HAS A SHEPHERD', life: 3.0, max: 3.0 };
+        G.flash = 0.8; G.flashColor = PU;
+        sfx('boss');
+      }
+      d.moonA += HER_MOON_SPIN * dt * (1 + e.phase * 0.3);
+      d.moons = [];
+      for (let k = 0; k < HER_MOON_N; k++) {
+        const a = d.moonA + k / HER_MOON_N * TAU;
+        d.moons.push({ x: e.x + Math.cos(a) * HER_MOON_R, y: e.y + Math.sin(a) * HER_MOON_R });
+      }
+      // ECLIPSE BEAMS — the moons converge un-light on you from 3 directions
+      if (!d.beams) {
+        d.beamCD -= dt;
+        if (d.beamCD <= 0) {
+          d.beams = { t: HER_BEAM_TELE, fire: HER_BEAM_DUR, aims: d.moons.map(m => angTo(m.x, m.y, player.x, player.y)) };
+          for (let k = 0; k < d.moons.length; k++)
+            addTelegraph({ kind: 'line', x: d.moons[k].x, y: d.moons[k].y, a: d.beams.aims[k], len: HER_BEAM_LEN, w: 9, dur: HER_BEAM_TELE, color: C });
+          sfx('zap');
+        }
+      } else if (d.beams.t > 0) {
+        d.beams.t -= dt;
+      } else {
+        d.beams.fire -= dt;
+        for (let k = 0; k < d.moons.length; k++) {
+          const m = d.moons[k], a = d.beams.aims[k];
+          const x2 = m.x + Math.cos(a) * HER_BEAM_LEN, y2 = m.y + Math.sin(a) * HER_BEAM_LEN;
+          G.beams.push({ x1: m.x, y1: m.y, x2, y2, w: HER_BEAM_W, life: 0.05, max: 0.05, color: C });
+          if (segDist(m.x, m.y, x2, y2, player.x, player.y) < HER_BEAM_W / 2 + player.r) hurtPlayer(e.dmg * B_BEAM, m.x, m.y);
+        }
+        if (d.beams.fire <= 0) { d.beams = null; d.beamCD = HER_BEAM_CD * (e.phase >= 2 ? 0.6 : 1); }
+      }
+      // UNLIGHT RAIN — armed shards condense around you, then lunge inward
+      d.rainT -= dt;
+      if (d.rainT <= 0) {
+        d.rainT = HER_RAIN_CD;
+        for (let k = 0; k < HER_RAIN_N + e.phase * 3; k++) {
+          const a = rand(0, TAU), rr = rand(140, 420);
+          const sx2 = player.x + Math.cos(a) * rr, sy2 = player.y + Math.sin(a) * rr;
+          const aim = angTo(sx2, sy2, player.x, player.y);
+          spawnEnemyProjectile(sx2, sy2, Math.cos(aim) * HER_RAIN_SPD, Math.sin(aim) * HER_RAIN_SPD, e.dmg * B_BULLET, C, { r: 6, arm: HER_RAIN_TELE });
+        }
+        e.flash = 0.7;
+      }
+      // HUNGERING DARK (phase 2+): an expanding ring of un-light — be inside
+      // it or beyond it, never WITHIN it
+      if (e.phase >= 1) {
+        if (!d.dark) {
+          d.darkT -= dt;
+          if (d.darkT <= 0) {
+            d.dark = { r: e.r + 40 };
+            addTelegraph({ kind: 'zone', x: e.x, y: e.y, r: e.r + 80, dur: 0.8, color: C });
+            sfx('boss');
+          }
+        } else {
+          d.dark.r += HER_DARK_SPD * dt;
+          const dd = dist(player.x, player.y, e.x, e.y);
+          if (Math.abs(dd - d.dark.r) < HER_DARK_W / 2) {
+            d.darkTick = (d.darkTick || 0) - dt;
+            if (d.darkTick <= 0) { d.darkTick = 0.25; hurtPlayer(HER_DARK_DPS * 0.25 + e.dmg * 0.1, e.x, e.y); }
+          }
+          if (d.dark.r > HER_DARK_MAX) { d.dark = null; d.darkT = HER_DARK_CD; }
+        }
+      }
+    },
+    onPhase(e, ph) {
+      floater(e.x, e.y - e.r - 44, ['', 'THE DARK HUNGERS', 'ECLIPSE'][Math.min(ph, 2)], '#b18cff', 24);
+      bossRing(e, 24 + ph * 8, 200, B_BULLET, rand(0, TAU), '#b18cff');
+    },
+    draw(e) {
+      const d = e.data, t = G.time; if (!d) return;
+      const C = '#b18cff';
+      // wings of un-light
+      for (const s of [-1, 1]) for (let k = 0; k < 3; k++) {
+        ctx.strokeStyle = rgba(C, 0.32 - k * 0.08); ctx.lineWidth = 2.5 - k * 0.5;
+        ctx.beginPath();
+        const w0 = s > 0 ? -1.1 : Math.PI - 1.1;
+        ctx.arc(e.x + s * e.r * 0.4, e.y, e.r * (1.1 + k * 0.35), w0, w0 + 2.2 + Math.sin(t * 2) * 0.1);
+        ctx.stroke();
+      }
+      glow(e.x, e.y, e.r * 1.6, C, e.phase >= 2 ? 0.75 : 0.5);
+      ctx.fillStyle = rgba('#070112', 0.95);
+      ctx.strokeStyle = rgba(e.phase >= 2 ? WH : C, 0.95); ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, TAU); ctx.fill(); ctx.stroke();
+      const pulse = 0.6 + 0.4 * Math.sin(t * 4);
+      ctx.fillStyle = rgba(WH, pulse);
+      ctx.beginPath(); ctx.ellipse(e.x, e.y, e.r * 0.5, e.r * 0.10 + pulse * 2, 0, 0, TAU); ctx.fill();
+      if (d.moons) for (const m of d.moons) {
+        glow(m.x, m.y, 18, C, 0.6);
+        ctx.fillStyle = rgba('#0a0214', 0.95); ctx.strokeStyle = rgba(C, 0.9); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(m.x, m.y, 13, 0, TAU); ctx.fill(); ctx.stroke();
+      }
+      if (d.dark) {
+        ctx.strokeStyle = rgba('#070112', 0.88); ctx.lineWidth = HER_DARK_W;
+        ctx.beginPath(); ctx.arc(e.x, e.y, d.dark.r, 0, TAU); ctx.stroke();
+        ctx.strokeStyle = rgba(C, 0.8); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(e.x, e.y, d.dark.r - HER_DARK_W / 2, 0, TAU); ctx.stroke();
+        ctx.beginPath(); ctx.arc(e.x, e.y, d.dark.r + HER_DARK_W / 2, 0, TAU); ctx.stroke();
+      }
+    },
+  },
+
+  /* ---- P2 (v4.4) POSTGAME BOSS: CHRONO WARDEN — time is its weapon ---- */
+  chrono: {
+    id: 'chrono', name: 'CHRONO WARDEN', color: '#ffd27a', r: 60, speed: 50, hpMul: 3.2,
+    drop: 'tempo', phaseThresholds: [0.66, 0.33], manuscripts: 3, bounty: 25, dimension: 'chrono',
+    update(e, dt) {
+      const d = e.data, C = '#ffd27a';
+      if (!d.init) {
+        d.init = true;
+        d.h1 = rand(0, TAU); d.h2 = rand(0, TAU);
+        d.tickT = CHR_TICK_CD; d.tickSide = 0; d.ticks = [];
+        d.snapT = CHR_SNAP_CD; d.snapX = e.x; d.snapY = e.y; d.hpAtSnap = e.hp; d.rewinds = 0;
+        G.dimension = 'chrono';
+        G.bossBanner = { name: 'YOU ARE PULLED THROUGH', sub: 'EVERY SECOND BELONGS TO IT', life: 3.0, max: 3.0 };
+        G.flash = 0.8; G.flashColor = YE;
+        sfx('boss');
+      }
+      const spdMul = e.phase >= 2 ? 1.5 : 1;
+      d.h1 += CHR_HAND_SPD1 * spdMul * dt;
+      d.h2 += CHR_HAND_SPD2 * spdMul * dt;
+      // the clock hands — two beams sweeping at different speeds
+      for (const [hh, ww] of [[d.h1, CHR_HAND_W * 1.3], [d.h2, CHR_HAND_W]]) {
+        const x2 = e.x + Math.cos(hh) * CHR_HAND_LEN, y2 = e.y + Math.sin(hh) * CHR_HAND_LEN;
+        G.beams.push({ x1: e.x, y1: e.y, x2, y2, w: ww, life: 0.05, max: 0.05, color: C });
+        if (segDist(e.x, e.y, x2, y2, player.x, player.y) < ww / 2 + player.r) hurtPlayer(e.dmg * B_BEAM * 0.7, e.x, e.y);
+      }
+      // TICK-TOCK — alternating semicircles detonate on the beat
+      d.tickT -= dt;
+      if (d.tickT <= 0) {
+        d.tickT = CHR_TICK_CD * (e.phase >= 2 ? 0.7 : 1);
+        d.tickSide = 1 - d.tickSide;
+        const base = angTo(e.x, e.y, player.x, player.y) + d.tickSide * Math.PI;
+        for (let k = 0; k < CHR_TICK_N; k++) {
+          const a = base - Math.PI / 2 + (k / (CHR_TICK_N - 1)) * Math.PI;
+          const zx = e.x + Math.cos(a) * CHR_TICK_DIST, zy = e.y + Math.sin(a) * CHR_TICK_DIST;
+          d.ticks.push({ x: zx, y: zy, t: CHR_TICK_TELE });
+          addTelegraph({ kind: 'zone', x: zx, y: zy, r: CHR_TICK_R, dur: CHR_TICK_TELE, color: C });
+        }
+        sfx('zap');
+      }
+      tickZoneList(d.ticks, dt, CHR_TICK_R, e);
+      // REWIND — burst it down and it snaps back in time and heals
+      d.snapT -= dt;
+      if (d.snapT <= 0) {
+        d.snapT = CHR_SNAP_CD;
+        const burst = d.hpAtSnap - e.hp;
+        if (burst > e.maxHp * CHR_REWIND_DMG && d.rewinds < CHR_REWIND_MAX) {
+          d.rewinds++;
+          e.x = d.snapX; e.y = d.snapY;
+          e.hp = Math.min(e.maxHp, e.hp + e.maxHp * CHR_REWIND_HEAL);
+          floater(e.x, e.y - e.r - 30, 'REWOUND (' + d.rewinds + '/' + CHR_REWIND_MAX + ')', C, 20);
+          for (let i = 0; i < 16; i++) spawnParticle(e.x, e.y, rand(-200, 200), rand(-200, 200), 0.4, 3, C, 'spark');
+          sfx('boss');
+        }
+        d.snapX = e.x; d.snapY = e.y; d.hpAtSnap = e.hp;
+      }
+      // TIME DILATION (phase 3): a chronofield drags you while it quickens
+      if (e.phase >= 2 && dist(e.x, e.y, player.x, player.y) < CHR_FIELD_R)
+        G.playerSlow = Math.min(G.playerSlow, CHR_FIELD_SLOW);
+    },
+    onPhase(e, ph) {
+      floater(e.x, e.y - e.r - 44, ['', 'THE BEAT QUICKENS', 'TIME DILATES'][Math.min(ph, 2)], '#ffd27a', 24);
+      bossRing(e, 22 + ph * 8, 190, B_BULLET, rand(0, TAU), '#ffd27a');
+    },
+    draw(e) {
+      const d = e.data, t = G.time; if (!d) return;
+      const C = '#ffd27a';
+      // the rewind ghost — where it will snap back to
+      if (d.rewinds < CHR_REWIND_MAX) {
+        ctx.strokeStyle = rgba(C, 0.25); ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(d.snapX, d.snapY, e.r * 0.8, 0, TAU); ctx.stroke();
+        ctx.font = '700 10px Segoe UI, sans-serif'; ctx.textAlign = 'center';
+        ctx.fillStyle = rgba(C, 0.4); ctx.fillText('⟲', d.snapX, d.snapY + 3);
+      }
+      glow(e.x, e.y, e.r * 1.5, C, 0.55);
+      // clock face
+      ctx.fillStyle = rgba('#1a1206', 0.92); ctx.strokeStyle = rgba(C, 0.95); ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, TAU); ctx.fill(); ctx.stroke();
+      for (let k = 0; k < 12; k++) {
+        const a = k / 12 * TAU;
+        ctx.strokeStyle = rgba(C, k % 3 === 0 ? 0.95 : 0.45); ctx.lineWidth = k % 3 === 0 ? 2.5 : 1.5;
+        ctx.beginPath();
+        ctx.moveTo(e.x + Math.cos(a) * e.r * 0.82, e.y + Math.sin(a) * e.r * 0.82);
+        ctx.lineTo(e.x + Math.cos(a) * e.r * 0.95, e.y + Math.sin(a) * e.r * 0.95);
+        ctx.stroke();
+      }
+      // inner gear
+      ctx.strokeStyle = rgba(WH, 0.8); ctx.lineWidth = 2;
+      poly(e.x, e.y, e.r * 0.35, 8, t * (e.phase >= 2 ? 2.2 : 1.1)); ctx.stroke();
+      glow(e.x, e.y, e.r * 0.22 + Math.sin(t * 5) * 2, WH, 0.9);
+    },
+  },
+
   architect: {
     id: 'architect', name: 'THE ARCHITECT', color: PU, r: ARCH_R, speed: ARCH_SPEED, hpMul: 1,
     drop: 'ascendant', phaseThresholds: [0.8, 0.6, 0.4, 0.2],
@@ -4832,7 +5054,7 @@ function killEnemy(e, reward) {
       // any boss that raised node-units (e.g. OBELISK pylons) takes them down with it
       if (e.data && Array.isArray(e.data.pylons))
         for (const p of e.data.pylons) if (!p.dead) killEnemy(p, false);
-      const bounty = BOSS_COINS_ROSTER + G.bossTier * BOSS_COINS_TIER;   // S2 coin bounty
+      const bounty = e.bdef.bounty || (BOSS_COINS_ROSTER + G.bossTier * BOSS_COINS_TIER);   // S2 coin bounty (P2 bosses pay premiums)
       PROFILE.stats.bossKills++;
       addCoins(bounty);
       floater(e.x, e.y - e.r - 30, '+' + bounty + ' ⬡', YE, 18);
@@ -4840,6 +5062,15 @@ function killEnemy(e, reward) {
       // unique Glyph Fragment (one per boss per run) — fuel for the SIGIL
       if (BOSS_IDS.includes(e.bdef.id) && !G.glyphs[e.bdef.id])
         spawnPickup(e.x, e.y + 44, 'glyph', { glyphId: e.bdef.id });
+      // P2: postgame bosses bleed manuscripts and release the dimension
+      if (e.bdef.manuscripts)
+        for (let k = 0; k < e.bdef.manuscripts; k++)
+          spawnPickup(e.x + rand(-70, 70), e.y + rand(-70, 70), 'manuscript');
+      if (e.bdef.dimension) {
+        G.dimension = null;
+        G.bossBanner = { name: 'YOU TEAR BACK THROUGH', life: 2.4, max: 2.4 };
+        G.flash = 0.7; G.flashColor = WH;
+      }
     }
   }
 
@@ -5983,6 +6214,17 @@ function drawHUD() {
     ctx.fillStyle = `rgba(36,8,64,${0.10 * G.postT})`;
     ctx.fillRect(0, 0, W, H);
   }
+  // P2: dimension veils
+  if (G.dimension === 'void') {
+    ctx.fillStyle = 'rgba(10,2,26,0.30)'; ctx.fillRect(0, 0, W, H);
+    const g2 = ctx.createRadialGradient(W / 2, H / 2, H * 0.25, W / 2, H / 2, H * 0.78);
+    g2.addColorStop(0, 'rgba(0,0,0,0)'); g2.addColorStop(1, 'rgba(2,0,8,0.55)');
+    ctx.fillStyle = g2; ctx.fillRect(0, 0, W, H);
+  } else if (G.dimension === 'chrono') {
+    ctx.fillStyle = 'rgba(64,44,6,0.18)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(255,210,120,0.05)';
+    for (let y = (G.time * 120) % 16; y < H; y += 16) ctx.fillRect(0, y, W, 1.5);
+  }
   // GLITCH boss screen overlay (cheap channel-split scanlines)
   if (G.glitchFX > 0) {
     const a = G.glitchFX;
@@ -6059,6 +6301,7 @@ function startGame() {
     glyphs: {}, glyphCount: 0, sigil: 0, ritual: null, sigilUI: null, lvUnlockAt: null,
     mirrorIntel: { dashes: 0, moveSum: 0, moveN: 0 },   // B4: MIRROR has been watching since spawn
     postgame: false, manuscripts: 0, rifts: [], riftT: 6, postT: 0,   // P1 postgame state
+    dimension: null, postBossT: 45, postBossNext: 'herald',           // P2 dimension fights
     dashZoom: 0, trail: [], spores: [], focusTarget: null, dmgDir: null,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });

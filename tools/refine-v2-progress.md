@@ -108,8 +108,11 @@ for every tunable. Zero console errors desktop + mobile.
       spawn interval ×1.8, violet veil, rift tears (void stragglers +
       gravity-flicker collapse + manuscript chance), manuscript pickups +
       HUD counter (10 needed for the Developer)
-- [ ] P2 Special postgame bosses ≥ Architect tier, including fights that pull
-      the player into other dimensions
+- [x] P2 Postgame bosses (v4.4): HERALD OF THE VOID (void dimension veil,
+      moon-converged beams, unlight rain, hungering-dark donut) + CHRONO
+      WARDEN (chrono veil, clock-hand beams, tick-tock semicircles, REWIND
+      anti-burst, time dilation); rift scheduler alternates them every 75s;
+      25⬡ + 3 manuscripts each; dimension enter/exit banners + veils
 - [ ] P3 THE DEVELOPER — final boss summoned with ≥10 manuscripts (dropped by
       the Architect and postgame bosses): throws code, debuffs/effects,
       teleports, dimension hops, multiple arms, summons mini-OVERLORDs,

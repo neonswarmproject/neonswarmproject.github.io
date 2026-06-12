@@ -4,6 +4,26 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v4.4 — 2026-06-12 — Postgame bosses: fights in other dimensions
+
+Every ~75s of postgame, a rift births a tyrant and PULLS YOU THROUGH — the
+world itself changes until it dies (each pays 25 ⬡ and 3 manuscripts):
+
+- **HERALD OF THE VOID** (void dimension — darkness veils the arena, light
+  dies at the edges): a winged un-light seraph. Three orbiting moons converge
+  telegraphed beams from three directions; armed shards condense around you
+  and lunge; from phase 2 the **HUNGERING DARK** — an expanding ring of
+  blackness you must stay inside of or beyond, never within. Phase 3 ECLIPSE
+  turns its corona white and compresses every cooldown.
+- **CHRONO WARDEN** (chrono dimension — sepia world, drifting scanlines): a
+  living clock. Two clock-hand beams sweep at different speeds; TICK-TOCK
+  semicircles detonate on alternating sides of the beat; **REWIND** — burst
+  it too hard and it snaps back to its 5s-old ghost (visible on the field)
+  and heals 4%, three times max — sustained pressure beats burst. Phase 3
+  dilates time around it while its hands quicken.
+- Both scale with elapsed time on top of huge multipliers — comparable to or
+  beyond the Architect by the time you meet them.
+
 ## v4.3 — 2026-06-12 — POSTGAME: the lattice breaks
 
 Killing THE ARCHITECT no longer just opens a farm window — it ignites the
