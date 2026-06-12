@@ -4,6 +4,23 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v4.3 — 2026-06-12 — POSTGAME: the lattice breaks
+
+Killing THE ARCHITECT no longer just opens a farm window — it ignites the
+postgame ("THE LATTICE BREAKS"):
+
+- **Calmer generation, weirder world:** normal spawn pressure drops ~45%
+  (interval ×1.8) and a violet veil settles over the arena. No horde spam —
+  the postgame is about its own mechanics.
+- **RIFT TEARS:** telegraphed wounds in space open near you, trickling
+  void-touched (purple, hardened) stragglers, then collapse with a gravity
+  flicker that drags you toward them and a shard burst. Some collapses yield
+  a **MANUSCRIPT** page.
+- **MANUSCRIPTS:** the Architect's corpse drops 3 pages; rifts (and the
+  coming postgame bosses) supply the rest. A page counter joins the HUD —
+  at 10/10: "THE SOURCE IS ASSEMBLED. Something wants to be written."
+  (THE DEVELOPER arrives in a coming build.)
+
 ## v4.2 — 2026-06-12 — THE ARCHITECT wields every relic (finale escalation)
 
 It was summoned by eleven relics — now it uses them. Each phase awakens an

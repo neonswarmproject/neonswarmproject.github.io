@@ -104,8 +104,10 @@ for every tunable. Zero console errors desktop + mobile.
       the ERASE cooldown compression; announced floaters per echo
 
 ### Postgame (after the Architect dies)
-- [ ] P1 Postgame state: LOWER enemy generation + genuinely new mechanics
-      (no big-horde spam)
+- [x] P1 Postgame state (v4.3): Architect death → THE LATTICE BREAKS;
+      spawn interval ×1.8, violet veil, rift tears (void stragglers +
+      gravity-flicker collapse + manuscript chance), manuscript pickups +
+      HUD counter (10 needed for the Developer)
 - [ ] P2 Special postgame bosses ≥ Architect tier, including fights that pull
       the player into other dimensions
 - [ ] P3 THE DEVELOPER — final boss summoned with ≥10 manuscripts (dropped by

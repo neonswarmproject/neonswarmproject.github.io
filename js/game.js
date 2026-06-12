@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '4.2';
+const VERSION = '4.3';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -2200,7 +2200,7 @@ function director(dt) {
   // the arena; it may still summon its own minions via spawnEnemy).
   if (!G.boss) {
     G.spawnTimer -= dt;
-    const interval = clamp(DIR_INTERVAL_BASE - m * DIR_INTERVAL_SLOPE, DIR_INTERVAL_MIN, DIR_INTERVAL_BASE);
+    const interval = clamp(DIR_INTERVAL_BASE - m * DIR_INTERVAL_SLOPE, DIR_INTERVAL_MIN, DIR_INTERVAL_BASE) * (G.postgame ? POST_CALM : 1);   // P1: calmer postgame
     if (G.spawnTimer <= 0) {
       G.spawnTimer = interval;
       const pressure = G.dirIntensity * G.spawnRamp;
@@ -2224,6 +2224,46 @@ function director(dt) {
   }
   // boss cadence: bosses are the main event. The next one is scheduled when
   // the current one dies (killEnemy sets nextBossAt = time + BOSS_FARM_WINDOW).
+  // P1 (v4.3): POSTGAME rift tears — small surges of void-touched stragglers,
+  // a gravity flicker at collapse, and the occasional manuscript page.
+  if (G.postgame && !G.boss && !G.ritual && G.rifts) {
+    G.riftT -= dt;
+    if (G.riftT <= 0 && G.rifts.length < POST_RIFT_MAX) {
+      G.riftT = POST_RIFT_CD;
+      const a = rand(0, TAU), rr = rand(300, 600), lim = ARENA / 2 - 100;
+      const rx = clamp(player.x + Math.cos(a) * rr, -lim, lim);
+      const ry = clamp(player.y + Math.sin(a) * rr, -lim, lim);
+      addTelegraph({ kind: 'zone', x: rx, y: ry, r: POST_RIFT_R, dur: 1.2, color: PU });
+      G.rifts.push({ x: rx, y: ry, t: POST_RIFT_DUR + 1.2, arm: 1.2, spawnT: 0, ang: rand(0, TAU) });
+      sfx('boss');
+    }
+  }
+  if (G.rifts) for (let i = G.rifts.length - 1; i >= 0; i--) {
+    const R = G.rifts[i];
+    R.t -= dt; R.ang += dt * 2;
+    if (R.arm > 0) { R.arm -= dt; continue; }
+    R.spawnT -= dt;
+    if (R.spawnT <= 0 && R.t > 2 && !G.boss) {
+      R.spawnT = POST_RIFT_SPAWN_CD;
+      const en = spawnEnemy(pick(['rusher', 'orbiter', 'shooter', 'grunt']), R.x + rand(-30, 30), R.y + rand(-30, 30), {});
+      if (en) { en.color = PU; en.hp *= 1.5; en.maxHp = en.hp; en.flash = 1; }
+    }
+    if (R.t < 2) {     // gravity flicker before collapse
+      const dd = dist(player.x, player.y, R.x, R.y);
+      if (dd < POST_RIFT_PULL_R && dd > 20) {
+        const a = angTo(player.x, player.y, R.x, R.y);
+        player.x += Math.cos(a) * POST_RIFT_PULL * dt;
+        player.y += Math.sin(a) * POST_RIFT_PULL * dt;
+      }
+    }
+    if (R.t <= 0) {
+      spawnRing(R.x, R.y, 18, POST_RIFT_R + 50, 0.5, PU);
+      bossRing({ x: R.x, y: R.y, dmg: 16, rot: 0 }, 10, 170, 0.5, rand(0, TAU), PU);
+      if (Math.random() < POST_RIFT_MS_CHANCE) spawnPickup(R.x, R.y, 'manuscript');
+      G.rifts.splice(i, 1);
+      sfx('bigExplode'); G.shake = Math.min(1, G.shake + 0.3);
+    }
+  }
   // The ARCHITECT ritual owns the arena: no roster boss may interrupt it.
   if (!G.boss && !G.ritual && G.time >= G.nextBossAt) spawnBoss();
 }
@@ -2532,6 +2572,14 @@ const ARCH_NOVA_CD = 7, ARCH_NOVA_TELE = 1.4, ARCH_NOVA_R = 420;
 const ARCH_ERASE_CD_MUL = 0.7;    // final phase: every cooldown shortened
 const ASCENDANT_DMG = 1.25, ASCENDANT_AS = 1.15, ASCENDANT_INVULN = 5;
 const META_ARCH_DMG = 1.05;       // permanent head start once the ARCHITECT falls
+// P1 (v4.3) POSTGAME — the Architect's death tears the run open. Calmer
+// pressure, weirder world: rift tears, void stragglers, manuscript pages.
+const POST_CALM = 1.8;             // spawn-interval multiplier (lower generation)
+const POST_RIFT_CD = 14, POST_RIFT_MAX = 2, POST_RIFT_DUR = 6, POST_RIFT_R = 70;
+const POST_RIFT_SPAWN_CD = 1.4, POST_RIFT_PULL = 130, POST_RIFT_PULL_R = 420;
+const POST_RIFT_MS_CHANCE = 0.22;  // chance a collapsing rift yields a manuscript
+const ARCH_MANUSCRIPTS = 3;        // the Architect's corpse yields pages
+const DEV_MANUSCRIPTS = 10;        // pages needed to summon THE DEVELOPER
 
 const BOSSES = {
   /* ---- SLOT 0: OVERLORD (intro) ---- */
@@ -4767,6 +4815,13 @@ function killEnemy(e, reward) {
       for (let k = 0; k < 5; k++)
         G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: 300 + k * 260, life: 0.7 + k * 0.12, max: 0.7 + k * 0.12, color: [WH, PU, MA, CY, YE][k], kind: 'ring' });
       spawnPickup(e.x, e.y, 'ascendant');
+      // P1 (v4.3): the Architect's death ignites the POSTGAME
+      if (!G.postgame) {
+        G.postgame = true;
+        G.bossBanner = { name: 'THE LATTICE BREAKS', sub: 'SOMETHING OLDER STIRS BEYOND', life: 3.4, max: 3.4 };
+      }
+      for (let k = 0; k < ARCH_MANUSCRIPTS; k++)
+        spawnPickup(e.x + rand(-70, 70), e.y + rand(-70, 70), 'manuscript');
       for (const o of G.enemies) if (o.type === 'archnode' && !o.dead) killEnemy(o, false);
       if (!META.architectSlain) { META.architectSlain = true; saveMeta(META); }
       floater(e.x, e.y - e.r, 'THE ARCHITECT FALLS', WH, 26);
@@ -4845,7 +4900,7 @@ function spawnGem(x, y, value) {
   }
   G.gems.push({ x, y, value, vx: rand(-40, 40), vy: rand(-40, 40), mag: false, t: 0 });
 }
-const PICKUP_COLOR = { heal: GR, magnet: BL, bomb: OR, prism: CY, nectar: GR, cleansave: MA, tempo: CY, singularity: PU, glyph: YE, ascendant: WH, surge: CY, longdash: YE, guard: BL };
+const PICKUP_COLOR = { heal: GR, magnet: BL, bomb: OR, prism: CY, nectar: GR, cleansave: MA, tempo: CY, singularity: PU, glyph: YE, ascendant: WH, surge: CY, longdash: YE, guard: BL, manuscript: '#e8e4ff' };
 function spawnPickup(x, y, type, opts) {
   const p = { x, y, type, t: 0, vy: 0 };
   if (opts) Object.assign(p, opts);
@@ -4963,6 +5018,14 @@ function applyPickup(type, p) {
     player.buffT.guard = C8_BUFF_T;
     floater(player.x, player.y - 24, 'GUARD FRAME', BL, 18); sfx('coin');
     for (let i = 0; i < 12; i++) spawnParticle(player.x, player.y, rand(-130, 130), rand(-130, 130), 0.45, 3, BL, 'spark');
+  } else if (type === 'manuscript') {       // P1: pages of the source
+    G.manuscripts = (G.manuscripts || 0) + 1;
+    floater(player.x, player.y - 24, 'MANUSCRIPT ' + G.manuscripts + '/' + DEV_MANUSCRIPTS, WH, 18); sfx('coin');
+    for (let i = 0; i < 14; i++) spawnParticle(player.x, player.y, rand(-120, 120), rand(-120, 120), 0.5, 3, WH, 'spark');
+    if (G.manuscripts === DEV_MANUSCRIPTS) {
+      G.bossBanner = { name: 'THE SOURCE IS ASSEMBLED', sub: 'SOMETHING WANTS TO BE WRITTEN', life: 3.2, max: 3.2 };
+      sfx('levelup');
+    }
   } else if (type === 'glyph') {            // ARCHITECT Relic/Glyph Fragment (Section D / B6)
     if (p && p.glyphId) G.glyphs[p.glyphId] = true;
     const n = Object.keys(G.glyphs).length;
@@ -5408,6 +5471,20 @@ function render() {
   // pickups (gentle bob + pulsing glow)
   for (const p of G.pickups) { let c = PICKUP_COLOR[p.type] || WH; if (p.type === 'glyph' && p.glyphId && BOSSES[p.glyphId]) c = BOSSES[p.glyphId].color; glow(p.x, p.y + Math.sin(p.t * 3) * 3, 16 + Math.sin(p.t * 6) * 3, c, 0.9); }
   // enemy projectiles
+  // P1 rift tears (under everything that fights)
+  if (G.rifts) for (const R of G.rifts) {
+    if (R.arm > 0) continue;
+    const a2 = clamp(R.t / POST_RIFT_DUR, 0, 1);
+    glow(R.x, R.y, POST_RIFT_R * 1.1, PU, 0.5 * a2 + 0.1);
+    ctx.fillStyle = rgba('#0a0214', 0.85);
+    ctx.beginPath(); ctx.ellipse(R.x, R.y, POST_RIFT_R * (0.6 + 0.1 * Math.sin(R.ang * 3)), POST_RIFT_R, R.ang * 0.3, 0, TAU); ctx.fill();
+    ctx.strokeStyle = rgba(PU, 0.9); ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(R.x, R.y, POST_RIFT_R * 0.85, R.ang, R.ang + Math.PI * 1.3); ctx.stroke();
+    ctx.strokeStyle = rgba(MA, 0.7); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(R.x, R.y, POST_RIFT_R * 0.55, -R.ang * 1.4, -R.ang * 1.4 + Math.PI); ctx.stroke();
+    if (Math.random() < 0.3)
+      spawnParticle(R.x + rand(-30, 30), R.y + rand(-40, 40), rand(-40, 40), rand(-60, 20), 0.4, 2.5, pick([PU, MA]), 'spark');
+  }
   // C6 spore trail puddles (under projectiles)
   if (G.spores) for (const sp of G.spores) {
     const a = sp.t / sp.max;
@@ -5518,6 +5595,13 @@ function render() {
       ctx.beginPath(); ctx.moveTo(-6, -3); ctx.lineTo(-2, -3); ctx.moveTo(-6, 3); ctx.lineTo(-2, 3); ctx.stroke();
     } else if (p.type === 'guard') {         // shield
       ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(5, -3); ctx.lineTo(5, 1); ctx.lineTo(0, 6); ctx.lineTo(-5, 1); ctx.lineTo(-5, -3); ctx.closePath(); ctx.stroke();
+    } else if (p.type === 'manuscript') {    // P1: a page of the source
+      ctx.strokeRect(-4.5, -6, 9, 12);
+      ctx.beginPath();
+      ctx.moveTo(-2.5, -3); ctx.lineTo(2.5, -3);
+      ctx.moveTo(-2.5, 0); ctx.lineTo(2.5, 0);
+      ctx.moveTo(-2.5, 3); ctx.lineTo(1, 3);
+      ctx.stroke();
     } else if (p.type === 'glyph') {         // rune shard (diamond + dot)
       poly(0, 0, 6, 4, Math.PI / 4); ctx.stroke();
       ctx.beginPath(); ctx.arc(0, 0, 1.8, 0, TAU); ctx.fill();
@@ -5877,6 +5961,28 @@ function drawHUD() {
     } else G.sigilUI = null;
   }
 
+  // P1: manuscript pages (the Developer's summon currency)
+  if (G.postgame && G.manuscripts > 0) {
+    const mx = W - 56, my = H - (IS_TOUCH ? 148 : 72) - 74;
+    const done = G.manuscripts >= DEV_MANUSCRIPTS;
+    const pl = done ? 0.7 + 0.3 * Math.sin(G.time * 5) : 0.5;
+    ctx.strokeStyle = rgba(done ? WH : '#cfcaff', pl); ctx.lineWidth = 2;
+    ctx.strokeRect(mx - 9, my - 12, 18, 24);
+    ctx.beginPath();
+    ctx.moveTo(mx - 5, my - 6); ctx.lineTo(mx + 5, my - 6);
+    ctx.moveTo(mx - 5, my); ctx.lineTo(mx + 5, my);
+    ctx.moveTo(mx - 5, my + 6); ctx.lineTo(mx + 2, my + 6);
+    ctx.stroke();
+    ctx.textAlign = 'center'; ctx.fillStyle = rgba(WH, 0.7); ctx.font = '700 10px Segoe UI, sans-serif';
+    ctx.fillText(G.manuscripts + '/' + DEV_MANUSCRIPTS, mx, my + 26);
+  }
+
+  // P1: postgame veil — the world remembers the Architect
+  if (G.postgame) {
+    G.postT = Math.min(1, (G.postT || 0) + 0.01);
+    ctx.fillStyle = `rgba(36,8,64,${0.10 * G.postT})`;
+    ctx.fillRect(0, 0, W, H);
+  }
   // GLITCH boss screen overlay (cheap channel-split scanlines)
   if (G.glitchFX > 0) {
     const a = G.glitchFX;
@@ -5952,6 +6058,7 @@ function startGame() {
     dirIntensity: 1, dirStress: 0, dirKps: 0, dirDps: 0, spawnRamp: 1,
     glyphs: {}, glyphCount: 0, sigil: 0, ritual: null, sigilUI: null, lvUnlockAt: null,
     mirrorIntel: { dashes: 0, moveSum: 0, moveN: 0 },   // B4: MIRROR has been watching since spawn
+    postgame: false, manuscripts: 0, rifts: [], riftT: 6, postT: 0,   // P1 postgame state
     dashZoom: 0, trail: [], spores: [], focusTarget: null, dmgDir: null,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });
