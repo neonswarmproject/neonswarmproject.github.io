@@ -4,6 +4,13 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v3.3 — 2026-06-12 — Boss coin bounties
+
+- Every roster boss kill pays **10 ⬡** (+2 per completed boss cycle); THE
+  ARCHITECT pays **40 ⬡**. Bounty floater on the kill; balance persists in
+  the profile and shows on the title screen. THE DEVELOPER will pay top
+  bounty when the postgame lands.
+
 ## v3.2 — 2026-06-12 — Persistent profile (save system)
 
 - New consolidated localStorage profile (`neonswarm.profile.v1`): **coins**,

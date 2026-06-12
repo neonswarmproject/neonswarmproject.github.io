@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '3.2';
+const VERSION = '3.3';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -2187,6 +2187,11 @@ const BOSS_SPEED_PER_TIER = 0.08;
 const BOSS_SPEED_PER_MIN  = 0.05;  // restores the v1 time scaling speed had...
 const BOSS_SPEED_TIME_CAP = 1.6;   // ...capped so late bosses stay dodgeable
 const BOSS_XP_LEVELS      = 5;     // a roster boss pays out ~5 level-ups of XP
+// S2 (v3.3): boss bounties — the shop economy. Cheapest skin ≈ 10 roster
+// bosses, flagship ≈ 100. THE ARCHITECT pays a fat premium.
+const BOSS_COINS_ROSTER   = 10;
+const BOSS_COINS_TIER     = 2;     // extra coins per completed bag cycle
+const BOSS_COINS_ARCH     = 40;
 const BOSS_GEM_COUNT      = 26;    // ...as a burst of this many gems
 const BOSS_BANNER_T       = 2.4;   // s the WARNING banner stays up
 const BOSS_SWEEP_HITSTOP  = 0.10, BOSS_SWEEP_SHAKE = 0.9;
@@ -3598,7 +3603,14 @@ function killEnemy(e, reward) {
       for (const o of G.enemies) if (o.type === 'archnode' && !o.dead) killEnemy(o, false);
       if (!META.architectSlain) { META.architectSlain = true; saveMeta(META); }
       floater(e.x, e.y - e.r, 'THE ARCHITECT FALLS', WH, 26);
+      PROFILE.stats.bossKills++;
+      addCoins(BOSS_COINS_ARCH);
+      floater(e.x, e.y - e.r - 30, '+' + BOSS_COINS_ARCH + ' ⬡', YE, 18);
     } else if (e.bdef) {
+      const bounty = BOSS_COINS_ROSTER + G.bossTier * BOSS_COINS_TIER;   // S2 coin bounty
+      PROFILE.stats.bossKills++;
+      addCoins(bounty);
+      floater(e.x, e.y - e.r - 30, '+' + bounty + ' ⬡', YE, 18);
       spawnPickup(e.x, e.y, e.bdef.drop); spawnPickup(e.x + 44, e.y, 'heal'); // exclusive drop + heal
       // unique Glyph Fragment (one per boss per run) — fuel for the SIGIL
       if (BOSS_IDS.includes(e.bdef.id) && !G.glyphs[e.bdef.id])

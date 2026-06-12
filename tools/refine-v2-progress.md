@@ -65,7 +65,8 @@ for every tunable. Zero console errors desktop + mobile.
 - [x] S1 Persistent save (v3.2): PROFILE module (neonswarm.profile.v1) —
       coins, owned/equipped skins, lifetime stats; defensive loader; legacy
       best/meta keys untouched; coin balance on title screen
-- [ ] S2 Coins from boss kills (Architect and, later, Developer pay the most)
+- [x] S2 Boss coin bounties (v3.3): roster 10⬡ (+2/cycle), ARCHITECT 40⬡;
+      floaters + persisted via PROFILE; Developer premium reserved for P3
 - [ ] S3 Skin system research + design (how 2D games do skins well), then the
       skin layer over the player render (palette/trail/shape/FX)
 - [ ] S4 Title-screen SHOP with 10 creative skins — cheapest ≈ 10 bosses of
