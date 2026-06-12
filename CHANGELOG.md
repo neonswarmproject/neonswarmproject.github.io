@@ -4,6 +4,30 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v4.5 — 2026-06-12 — THE DEVELOPER (the final boss)
+
+Collect 10 manuscripts (the Architect drops 3; postgame bosses and rifts
+supply the rest), then press **G** / tap the COMPILE slot. A green terminal
+portal streams code, and THE DEVELOPER compiles in — massive, six-armed, and
+aware it wrote the game.
+
+- **Six segmented arms** sweep around a giant code-faced hull (scrolling
+  source, a single cursor-eye, corner brackets); the arm tips are lethal and
+  are the muzzles for thrown code.
+- **THROW CODE:** fans of glyph-bullets (`{ } ; < > / *`) from multiple arms.
+- **CURSES (LINT, phase 2):** telegraphed hex bolts that, on hit, **slow you**,
+  **reverse your controls**, or **infect you with a BUG** (damage-over-time) —
+  a clean dash dodges the hex too.
+- **mini-OVERLORDs:** summons minion cores that fire their own radial rings.
+- **TELEPORT + COMPILE-BEAMS (RUNTIME, phase 3):** glitch-blinks across the
+  arena; quad rotating beams sweep from the body.
+- **EXCEPTION (phase 4):** Warden-style gap rings, **dimension hops** (it
+  warps you between void/chrono/source mid-fight), and **`/kill player`** —
+  telegraphed red zones that snap to your position.
+- **KERNEL PANIC (phase 5):** the eye goes red, every cooldown compresses,
+  all of the above at once.
+- Pays a massive 200 ⬡ bounty. (Death taunts + the survival trophy land next.)
+
 ## v4.4 — 2026-06-12 — Postgame bosses: fights in other dimensions
 
 Every ~75s of postgame, a rift births a tyrant and PULLS YOU THROUGH — the

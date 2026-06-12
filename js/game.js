@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '4.4';
+const VERSION = '4.5';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -420,7 +420,7 @@ function key(e, down) {
     if (G.state === 'playing' || G.state === 'paused') {
       if (k === 'Escape' || k === 'p') return togglePause();
     }
-    if (G.state === 'playing' && k === 'g') return activateSigil();   // ARCHITECT summon
+    if (G.state === 'playing' && k === 'g') return tryRitualKey();   // ARCHITECT / DEVELOPER summon
     keys.add(k);
     if ((k === ' ' || k === 'Shift') && G.state === 'playing') tryDash();
   } else {
@@ -452,6 +452,13 @@ function onPointerDown(e) {
   if (G.state === 'playing' && G.sigilUI &&
       dist(x, y, G.sigilUI.x, G.sigilUI.y) <= G.sigilUI.r + 8) {
     activateSigil();
+    if (e.pointerType === 'touch') touches.set(e.pointerId, { role: 'ui' });
+    return;
+  }
+  // P3: MANUSCRIPT slot tap — summon THE DEVELOPER when the source is assembled
+  if (G.state === 'playing' && G.devUI &&
+      dist(x, y, G.devUI.x, G.devUI.y) <= G.devUI.r + 10) {
+    summonDeveloper();
     if (e.pointerType === 'touch') touches.set(e.pointerId, { role: 'ui' });
     return;
   }
@@ -532,7 +539,14 @@ window.addEventListener('pointerup', onPointerUp);
 window.addEventListener('pointercancel', onPointerUp);
 
 // resolve movement direction (-1..1 each axis), magnitude up to 1
+// P3: THE DEVELOPER can invert your controls for a few seconds. Every movement
+// consumer calls moveVector(); the wrapper flips the raw vector while cursed.
 function moveVector() {
+  const v = moveVectorRaw();
+  if (player.reversed > 0 && v.mag > 0) { v.x = -v.x; v.y = -v.y; }
+  return v;
+}
+function moveVectorRaw() {
   let dx = 0, dy = 0;
   if (keys.has('a') || keys.has('ArrowLeft'))  dx -= 1;
   if (keys.has('d') || keys.has('ArrowRight')) dx += 1;
@@ -2402,12 +2416,43 @@ function spawnBoss(forcedId) {
 
 /* ---- THE ARCHITECT: summon ritual + spawn (Section D) ---- */
 function activateSigil() {
-  if (G.sigil !== 1 || G.state !== 'playing' || G.boss || G.ritual) return;
+  if (G.sigil !== 1 || G.state !== 'playing' || G.boss || G.ritual || G.devRitual) return;
   G.sigil = 2;
   G.ritual = { t: ARCH_RITUAL };
   addTelegraph({ kind: 'zone', x: 0, y: 0, r: ARCH_R * 2.4, dur: ARCH_RITUAL, color: PU });
   G.bossBanner = { name: 'SOMETHING STIRS BEYOND THE SWARM…', life: 3.0, max: 3.0 };
   sfx('boss');
+}
+// P3: G / manuscript-slot tap picks the available ritual (Developer first).
+function tryRitualKey() {
+  if (G.manuscripts >= DEV_MANUSCRIPTS && !G.devSummoned) return summonDeveloper();
+  return activateSigil();
+}
+function summonDeveloper() {
+  if (G.state !== 'playing' || G.boss || G.ritual || G.devRitual || G.devSummoned) return;
+  if (G.manuscripts < DEV_MANUSCRIPTS) return;
+  G.devSummoned = true;
+  G.devRitual = { t: DEV_RITUAL };
+  addTelegraph({ kind: 'zone', x: 0, y: 0, r: DEV_R * 2.2, dur: DEV_RITUAL, color: GR });
+  G.bossBanner = { name: 'THE SOURCE COMPILES…', sub: 'YOU SHOULD NOT BE ABLE TO READ THIS', life: 3.2, max: 3.2 };
+  G.flash = 0.7; G.flashColor = GR;
+  sfx('boss');
+}
+function spawnDeveloper() {
+  bossSweepArena(0, 0, GR);
+  G.eProj.length = 0;
+  const def = BOSSES.developer;
+  const e = spawnEnemy('tank', 0, -40, {
+    boss: true, r: DEV_R, color: GR, shape: 'boss',
+    hp: DEV_HP, maxHp: DEV_HP, speed: DEV_SPEED, dmg: DEV_DMG,
+    xp: 800, name: def.name, bdef: def, data: {}, phase: 0,
+    entrance: DEV_ENTRANCE, phasePause: 0,
+  });
+  G.boss = e;
+  G.bossBanner = { name: 'THE DEVELOPER', sub: 'WHO DO YOU THINK CODES THIS GAME?', life: 3.6, max: 3.6 };
+  G.flash = 0.85; G.flashColor = GR; G.shake = 1;
+  sfx('boss');
+  if (Sound) { Sound.setIntensity(1); Sound.setMusicTempo(140); }
 }
 
 function spawnArchitect() {
@@ -2598,6 +2643,23 @@ const CHR_HAND_W = 14, CHR_HAND_LEN = 520, CHR_HAND_SPD1 = 0.5, CHR_HAND_SPD2 = 
 const CHR_TICK_CD = 4.6, CHR_TICK_TELE = 1.0, CHR_TICK_R = 150, CHR_TICK_N = 4, CHR_TICK_DIST = 260;
 const CHR_SNAP_CD = 5, CHR_REWIND_DMG = 0.06, CHR_REWIND_HEAL = 0.04, CHR_REWIND_MAX = 3;
 const CHR_FIELD_R = 500, CHR_FIELD_SLOW = 0.7;
+// P3 (v4.5) THE DEVELOPER — the final boss. Massive, multi-armed, debuff-
+// slinging, dimension-hopping. Summoned by 10 manuscripts.
+const DEV_HP = 90000, DEV_DMG = 32, DEV_R = 150, DEV_SPEED = 22;
+const DEV_RITUAL = 4.5, DEV_ENTRANCE = 3.0;
+const DEV_ARMS = 6, DEV_ARM_LEN = 200, DEV_ARM_SEG = 3, DEV_ARM_SPIN = 0.5;
+const DEV_CODE_CD = 2.4, DEV_CODE_SPD = 240, DEV_CODE_ARC = 0.16;     // throws code
+const DEV_DEBUFF_CD = 7, DEV_DEBUFF_TELE = 0.7, DEV_DEBUFF_SPD = 300;  // throws curses
+const DEV_SLOW_MUL = 0.5, DEV_SLOW_T = 4, DEV_REVERSE_T = 3.5, DEV_BUG_T = 5, DEV_BUG_DPS = 4;
+const DEV_TP_CD = 6, DEV_SUMMON_CD = 11, DEV_SUMMON_N = 2;             // teleport / mini-OVERLORDs
+const DEV_BEAM_CD = 8, DEV_BEAM_TELE = 1.1, DEV_BEAM_DUR = 2.4, DEV_BEAM_N = 4, DEV_BEAM_W = 26, DEV_BEAM_LEN = 1600;
+const DEV_GAPRING_CD = 4, DEV_GAPRING_N = 40, DEV_GAPRING_GAP = 6, DEV_GAPRING_SPD = 200;
+const DEV_KILL_CD = 9, DEV_KILL_TELE = 1.3, DEV_KILL_R = 150, DEV_KILL_N = 4;   // "/kill player"
+const DEV_DIM_CD = 14;          // dimension hops (phase 3+)
+const DEV_ERASE_MUL = 0.62;     // final phase cooldown compression
+const MINIOVL_FIRE = 2.2, MINIOVL_RINGN = 10, MINIOVL_BSPD = 180;
+const DEV_GLYPHS = ['{', '}', '(', ')', ';', '<', '>', '/', '*', '=', '#', '0', '1'];
+const DEV_CODELINES = ['while(true){', '  swarm.spawn();', '  if(player.dead)', '    return win;', '} catch(e){', '  player.kill();', 'function boss(){', '  throw You;', 'rm -rf /hope', 'sudo win=false'];
 
 const BOSSES = {
   /* ---- SLOT 0: OVERLORD (intro) ---- */
@@ -4224,6 +4286,231 @@ const BOSSES = {
     },
   },
 
+  /* ---- P3 (v4.5) THE DEVELOPER — the final boss. It wrote all of this. ---- */
+  developer: {
+    id: 'developer', name: 'THE DEVELOPER', color: GR, r: DEV_R, speed: DEV_SPEED,
+    hpMul: 1, drop: 'ascendant', phaseThresholds: [0.82, 0.62, 0.42, 0.22],
+    dimension: 'source', bounty: 200, selfMove: true,
+    update(e, dt) {
+      const d = e.data;
+      const F = e.phase >= 4 ? DEV_ERASE_MUL : 1;
+      if (!d.init) {
+        d.init = true;
+        d.armA = rand(0, TAU); d.tips = [];
+        d.codeT = 1.5; d.debT = DEV_DEBUFF_CD; d.tpT = DEV_TP_CD; d.sumT = DEV_SUMMON_CD * 0.6;
+        d.beamT = DEV_BEAM_CD; d.beam = null; d.grT = DEV_GAPRING_CD; d.killT = DEV_KILL_CD; d.kills = [];
+        d.dimT = DEV_DIM_CD; d.minions = []; d.debs = [];
+        G.dimension = 'source';
+        d.taunted = false;
+      }
+      // float slowly toward a comfortable mid-range distance from the player
+      const want = angTo(e.x, e.y, player.x, player.y), gd = dist(e.x, e.y, player.x, player.y);
+      const drift = gd > 460 ? 1 : gd < 300 ? -0.6 : 0;
+      const lim = ARENA / 2 - e.r;
+      e.x = clamp(e.x + Math.cos(want) * e.speed * drift * dt, -lim, lim);
+      e.y = clamp(e.y + Math.sin(want) * e.speed * drift * dt, -lim, lim);
+      e.vx = e.vy = 0;
+
+      // SIX ARMS — segmented limbs sweep around the body; tips are lethal and
+      // are the muzzles for thrown code.
+      d.armA += DEV_ARM_SPIN * dt * (1 + e.phase * 0.16);
+      d.tips = [];
+      for (let k = 0; k < DEV_ARMS; k++) {
+        const a = d.armA + k / DEV_ARMS * TAU;
+        const wob = Math.sin(G.time * 2 + k) * 0.3;
+        const tx = e.x + Math.cos(a + wob) * (e.r + DEV_ARM_LEN);
+        const ty = e.y + Math.sin(a + wob) * (e.r + DEV_ARM_LEN);
+        d.tips.push({ x: tx, y: ty, a: a + wob });
+        if (e.entrance <= 0 && dist2(tx, ty, player.x, player.y) < (22 + player.r) ** 2)
+          hurtPlayer(e.dmg * 0.5, tx, ty);
+      }
+      if (e.entrance > 0) return;   // still materializing
+
+      // THROW CODE — fans of glyph-bullets from two opposing arm tips
+      d.codeT -= dt;
+      if (d.codeT <= 0) {
+        d.codeT = DEV_CODE_CD * F;
+        const armsFiring = e.phase >= 2 ? 3 : 2;
+        for (let m = 0; m < armsFiring; m++) {
+          const tip = d.tips[(m * 2) % d.tips.length];
+          const base = angTo(tip.x, tip.y, player.x + player.vx * 0.3, player.y + player.vy * 0.3);
+          for (let k = -2; k <= 2; k++)
+            spawnEnemyProjectile(tip.x, tip.y, Math.cos(base + k * DEV_CODE_ARC) * DEV_CODE_SPD, Math.sin(base + k * DEV_CODE_ARC) * DEV_CODE_SPD, e.dmg * B_BULLET, GR, { r: 6, kind: 'code', glyph: pick(DEV_GLYPHS) });
+        }
+        e.flash = 0.5;
+      }
+      // THROW A CURSE (phase 1+) — a slow, telegraphed hex bolt that debuffs
+      if (e.phase >= 1) {
+        d.debT -= dt;
+        if (d.debT <= 0) {
+          d.debT = DEV_DEBUFF_CD * F;
+          const curse = pick(['slow', 'reverse', 'bug']);
+          const col = curse === 'slow' ? CY : curse === 'reverse' ? MA : GR;
+          const a = angTo(e.x, e.y, player.x + player.vx * 0.5, player.y + player.vy * 0.5);
+          spawnEnemyProjectile(e.x, e.y, Math.cos(a) * DEV_DEBUFF_SPD, Math.sin(a) * DEV_DEBUFF_SPD, e.dmg * 0.4, col, { r: 12, curse, kind: 'hex', arm: DEV_DEBUFF_TELE });
+          floater(e.x, e.y - e.r - 30, '> apply(' + curse + ')', col, 18);
+          sfx('zap');
+        }
+        // mini-OVERLORD minions
+        d.sumT -= dt;
+        d.minions = d.minions.filter(m => !m.ref.dead);
+        if (d.sumT <= 0 && d.minions.length < 4) {
+          d.sumT = DEV_SUMMON_CD * F;
+          for (let k = 0; k < DEV_SUMMON_N; k++) {
+            const a = rand(0, TAU);
+            const ref = spawnEnemy('grunt', e.x + Math.cos(a) * (e.r + 50), e.y + Math.sin(a) * (e.r + 50),
+              { hp: 220, maxHp: 220, dmg: e.dmg * 0.5, speed: 70, r: 22, color: WH });
+            if (ref) { ref.flash = 1; d.minions.push({ ref, fireT: rand(1, MINIOVL_FIRE) }); }
+          }
+          floater(e.x, e.y - e.r - 30, '> spawn(miniOverlord ×' + DEV_SUMMON_N + ')', WH, 16);
+        }
+        for (const m of d.minions) {
+          m.fireT -= dt;
+          if (m.fireT <= 0) { m.fireT = MINIOVL_FIRE; bossRing(m.ref, MINIOVL_RINGN, MINIOVL_BSPD, B_BULLET * 0.8, rand(0, TAU), WH); }
+        }
+      }
+      // TELEPORT (phase 2+) — blinks across the arena in a glitch puff
+      if (e.phase >= 2) {
+        d.tpT -= dt;
+        if (d.tpT <= 0) {
+          d.tpT = DEV_TP_CD * F;
+          for (let i = 0; i < 20; i++) spawnParticle(e.x, e.y, rand(-260, 260), rand(-260, 260), 0.4, 4, GR, 'spark');
+          const a = rand(0, TAU), rr = rand(320, 520);
+          e.x = clamp(player.x + Math.cos(a) * rr, -lim, lim);
+          e.y = clamp(player.y + Math.sin(a) * rr, -lim, lim);
+          G.glitchFX = Math.max(G.glitchFX || 0, 0.5);
+          spawnRing(e.x, e.y, 24, e.r * 2, 0.4, GR);
+          sfx('dash');
+        }
+        // QUAD COMPILE-BEAMS (OVERLORD/ARCHITECT echo) from the arms
+        if (!d.beam) {
+          d.beamT -= dt;
+          if (d.beamT <= 0) {
+            d.beam = { t: DEV_BEAM_TELE, fire: DEV_BEAM_DUR, a: angTo(e.x, e.y, player.x, player.y) };
+            for (let k = 0; k < DEV_BEAM_N; k++)
+              addTelegraph({ kind: 'line', x: e.x, y: e.y, a: d.beam.a + k / DEV_BEAM_N * TAU, len: DEV_BEAM_LEN, w: 11, dur: DEV_BEAM_TELE, color: GR });
+          }
+        } else if (d.beam.t > 0) {
+          d.beam.t -= dt;
+        } else {
+          d.beam.fire -= dt; d.beam.a += 0.34 * dt;
+          for (let k = 0; k < DEV_BEAM_N; k++) {
+            const a = d.beam.a + k / DEV_BEAM_N * TAU;
+            const x2 = e.x + Math.cos(a) * DEV_BEAM_LEN, y2 = e.y + Math.sin(a) * DEV_BEAM_LEN;
+            G.beams.push({ x1: e.x, y1: e.y, x2, y2, w: DEV_BEAM_W, life: 0.05, max: 0.05, color: GR });
+            if (segDist(e.x, e.y, x2, y2, player.x, player.y) < DEV_BEAM_W / 2 + player.r) hurtPlayer(e.dmg * B_BEAM);
+          }
+          if (d.beam.fire <= 0) { d.beam = null; d.beamT = DEV_BEAM_CD * F; }
+        }
+      }
+      // EXCEPTIONS (phase 3+) — gap rings (WARDEN echo), dimension hops, /kill
+      if (e.phase >= 3) {
+        d.grT -= dt;
+        if (d.grT <= 0) {
+          d.grT = DEV_GAPRING_CD * F;
+          const gap = (Math.random() * DEV_GAPRING_N) | 0;
+          for (let k = 0; k < DEV_GAPRING_N; k++) {
+            if ((k - gap + DEV_GAPRING_N) % DEV_GAPRING_N < DEV_GAPRING_GAP) continue;
+            const a = k / DEV_GAPRING_N * TAU;
+            spawnEnemyProjectile(e.x, e.y, Math.cos(a) * DEV_GAPRING_SPD, Math.sin(a) * DEV_GAPRING_SPD, e.dmg * B_BULLET, MA, { r: 7 });
+          }
+        }
+        d.dimT -= dt;
+        if (d.dimT <= 0) {
+          d.dimT = DEV_DIM_CD;
+          G.dimension = pick(['void', 'chrono', 'source']);
+          G.flash = 0.5; G.flashColor = WH;
+          floater(e.x, e.y - e.r - 30, '> warp(' + G.dimension + ')', WH, 18);
+          sfx('boss');
+        }
+        // "/kill player" — telegraphed instakill-pressure zones snapping to you
+        d.killT -= dt;
+        if (d.killT <= 0) {
+          d.killT = DEV_KILL_CD * F;
+          floater(player.x, player.y - 50, '/kill player', RD, 20);
+          for (let k = 0; k < DEV_KILL_N; k++) {
+            const zx = player.x + rand(-200, 200), zy = player.y + rand(-200, 200);
+            d.kills.push({ x: zx, y: zy, t: DEV_KILL_TELE });
+            addTelegraph({ kind: 'zone', x: zx, y: zy, r: DEV_KILL_R, dur: DEV_KILL_TELE, color: RD });
+          }
+          sfx('boss');
+        }
+        for (let i = d.kills.length - 1; i >= 0; i--) {
+          const z = d.kills[i]; z.t -= dt;
+          if (z.t <= 0) {
+            explodeAt(z.x, z.y, DEV_KILL_R, RD);
+            if (dist(z.x, z.y, player.x, player.y) < DEV_KILL_R + player.r) hurtPlayer(e.dmg * 1.3, z.x, z.y);
+            d.kills.splice(i, 1);
+          }
+        }
+      }
+    },
+    onPhase(e, ph) {
+      const names = ['SYNTAX', 'LINT', 'RUNTIME', 'EXCEPTION', 'KERNEL PANIC'];
+      floater(e.x, e.y - e.r - 70, names[Math.min(ph, 4)], GR, 30);
+      bossRing(e, 36 + ph * 8, 220, B_BULLET, rand(0, TAU), [GR, WH, MA, RD, CY][ph % 5]);
+      G.flash = 0.5; G.flashColor = GR; G.shake = 1;
+    },
+    draw(e) {
+      const d = e.data, t = G.time; if (!d) return;
+      // ARMS — segmented limbs with glowing joints, drawn under the body
+      if (d.tips) for (let k = 0; k < d.tips.length; k++) {
+        const tip = d.tips[k];
+        ctx.strokeStyle = rgba(GR, 0.7); ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.moveTo(e.x, e.y);
+        for (let s = 1; s <= DEV_ARM_SEG; s++) {
+          const f = s / DEV_ARM_SEG;
+          const jx = lerp(e.x, tip.x, f) + Math.cos(tip.a + s) * 12 * Math.sin(t * 3 + k);
+          const jy = lerp(e.y, tip.y, f) + Math.sin(tip.a + s) * 12 * Math.sin(t * 3 + k);
+          ctx.lineTo(jx, jy);
+        }
+        ctx.stroke();
+        glow(tip.x, tip.y, 14, k % 2 ? WH : GR, 0.85);
+        ctx.fillStyle = rgba('#0a1a08', 0.9); ctx.strokeStyle = rgba(WH, 0.9); ctx.lineWidth = 2;
+        poly(tip.x, tip.y, 12, 3, tip.a + t); ctx.fill(); ctx.stroke();
+      }
+      // BODY — a massive terminal core: bracketed hull, scrolling code face
+      glow(e.x, e.y, e.r * 1.7, GR, e.phase >= 4 ? 0.8 : 0.55);
+      ctx.save(); ctx.translate(e.x, e.y);
+      // hull octagon
+      ctx.fillStyle = rgba('#06140a', 0.96);
+      ctx.strokeStyle = rgba(e.phase >= 4 ? RD : GR, 0.95); ctx.lineWidth = 5;
+      poly(0, 0, e.r, 8, t * 0.1); ctx.fill(); ctx.stroke();
+      // inner "screen"
+      ctx.fillStyle = rgba('#0a2010', 0.9);
+      ctx.beginPath(); ctx.rect(-e.r * 0.6, -e.r * 0.5, e.r * 1.2, e.r * 1.0); ctx.fill();
+      ctx.strokeStyle = rgba(GR, 0.5); ctx.lineWidth = 1.5; ctx.stroke();
+      // scrolling code lines on the face
+      ctx.save();
+      ctx.beginPath(); ctx.rect(-e.r * 0.6, -e.r * 0.5, e.r * 1.2, e.r * 1.0); ctx.clip();
+      ctx.font = '10px monospace'; ctx.textAlign = 'left';
+      for (let r = 0; r < 9; r++) {
+        const yy = -e.r * 0.5 + ((r * 13 + t * 40) % (e.r * 1.0));
+        ctx.fillStyle = rgba(GR, 0.3 + 0.3 * Math.sin(r + t * 3));
+        ctx.fillText(DEV_CODELINES[(r + Math.floor(t)) % DEV_CODELINES.length], -e.r * 0.55, yy);
+      }
+      ctx.restore();
+      // single great eye / cursor
+      const blink = Math.sin(t * 1.7) > -0.9;
+      if (blink) {
+        glow(0, 0, 18, e.phase >= 4 ? RD : WH, 0.95);
+        ctx.fillStyle = rgba(e.phase >= 4 ? RD : WH, 0.95);
+        ctx.beginPath(); ctx.arc(0, 0, e.r * 0.16, 0, TAU); ctx.fill();
+        ctx.fillStyle = rgba('#06140a', 1);
+        ctx.beginPath(); ctx.arc(0, 0, e.r * 0.07, 0, TAU); ctx.fill();
+      }
+      // corner brackets [ ]
+      ctx.strokeStyle = rgba(WH, 0.8); ctx.lineWidth = 3;
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+        const bx = sx * e.r * 0.92, by = sy * e.r * 0.92;
+        ctx.beginPath();
+        ctx.moveTo(bx - sx * 14, by); ctx.lineTo(bx, by); ctx.lineTo(bx, by - sy * 14);
+        ctx.stroke();
+      }
+      ctx.restore();
+    },
+  },
+
   architect: {
     id: 'architect', name: 'THE ARCHITECT', color: PU, r: ARCH_R, speed: ARCH_SPEED, hpMul: 1,
     drop: 'ascendant', phaseThresholds: [0.8, 0.6, 0.4, 0.2],
@@ -4937,10 +5224,21 @@ function updateEnemyProjectiles(dt) {
       spawnParticle(p.x, p.y, 0, 0, 0.15, 3, p.color, 'spark');
     if (p.life <= 0 || dist2(p.x, p.y, player.x, player.y) > EBULLET_CULL * EBULLET_CULL) { arr.splice(i, 1); continue; }
     if (dist2(p.x, p.y, player.x, player.y) < (p.r + player.r) ** 2) {
+      if (p.curse) applyCurse(p.curse);                        // P3: THE DEVELOPER's hexes
       hurtPlayer(p.dmg, p.x - p.vx * 0.1, p.y - p.vy * 0.1);   // indicator points up the bullet's path
       arr.splice(i, 1);
     }
   }
+}
+// P3: a curse only lands if the player wasn't dashing/invulnerable (same gate
+// as damage), so a clean dodge dodges the hex too.
+function applyCurse(kind) {
+  if (player.invuln > 0 || player.dashTime > 0) return;
+  if (kind === 'slow')     { player.devSlow = DEV_SLOW_T; floater(player.x, player.y - player.r - 8, 'SLOWED', CY, 16); }
+  else if (kind === 'reverse') { player.reversed = DEV_REVERSE_T; floater(player.x, player.y - player.r - 8, 'CONTROLS REVERSED', MA, 16); }
+  else if (kind === 'bug')  { player.bug = DEV_BUG_T; player.bugTick = 0; floater(player.x, player.y - player.r - 8, 'INFECTED', GR, 16); }
+  G.glitchFX = Math.max(G.glitchFX || 0, 0.4);
+  sfx('hurt');
 }
 
 /* ===========================================================================
@@ -5187,6 +5485,15 @@ function updateBuffs(dt) {
   if (b.surge > 0) b.surge -= dt;
   if (b.longdash > 0) b.longdash -= dt;
   if (b.guard > 0) b.guard -= dt;
+  // P3: THE DEVELOPER's debuffs — slow (via playerSlow), reversed controls,
+  // and BUG (damage-over-time). All tick down here so they self-clear.
+  if (player.reversed > 0) player.reversed -= dt;
+  if (player.devSlow > 0) { player.devSlow -= dt; G.playerSlow = Math.min(G.playerSlow, DEV_SLOW_MUL); }
+  if (player.bug > 0) {
+    player.bug -= dt;
+    player.bugTick = (player.bugTick || 0) - dt;
+    if (player.bugTick <= 0) { player.bugTick = 0.5; if (player.hp > DEV_BUG_DPS) { player.hp -= DEV_BUG_DPS; floater(player.x, player.y - player.r, 'BUG', GR, 12); } }
+  }
   if (b.aura > 0) {
     b.aura -= dt;
     b.auraTick -= dt;
@@ -5447,6 +5754,16 @@ function update(dt) {
     }
     if (G.ritual.t <= 0) { G.ritual = null; spawnArchitect(); }
   }
+  // P3: THE DEVELOPER compiles in — streaming code glyphs, heavier rumble
+  if (G.devRitual) {
+    G.devRitual.t -= dt;
+    G.shake = Math.min(1, G.shake + dt * 0.35);
+    if (Math.random() < 0.9) {
+      const a = rand(0, TAU), rr = rand(220, 540);
+      spawnParticle(Math.cos(a) * rr, Math.sin(a) * rr, -Math.cos(a) * 380, -Math.sin(a) * 380, 0.5, 3, pick([GR, WH, '#39ff88']), 'spark');
+    }
+    if (G.devRitual.t <= 0) { G.devRitual = null; spawnDeveloper(); }
+  }
 
   // spawn waves / bosses
   director(dt);
@@ -5689,6 +6006,21 @@ function render() {
     ctx.fillStyle = rgba('#05030f', 0.5 + 0.4 * k);    // the void behind the swarm
     ctx.beginPath(); ctx.arc(0, 0, R * 0.55, 0, TAU); ctx.fill();
   }
+  // P3: THE DEVELOPER compiling in — a green terminal portal streaming code
+  if (G.devRitual) {
+    const k = 1 - G.devRitual.t / DEV_RITUAL;
+    const R = 70 + 240 * k;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = rgba(GR, 0.6); ctx.lineWidth = 3;
+    ctx.strokeRect(-R * 0.7, -R * 0.7, R * 1.4, R * 1.4);
+    for (let i = 0; i < 2; i++) { ctx.strokeStyle = rgba(i ? WH : GR, 0.4); const a0 = G.time * (3 + i * 2); ctx.beginPath(); ctx.arc(0, 0, R * (0.5 + i * 0.3), a0, a0 + 4); ctx.stroke(); }
+    glow(0, 0, R, GR, 0.35 + 0.3 * Math.sin(G.time * 9));
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = rgba('#03100a', 0.5 + 0.4 * k);
+    ctx.beginPath(); ctx.arc(0, 0, R * 0.5, 0, TAU); ctx.fill();
+    ctx.font = '11px monospace'; ctx.textAlign = 'center'; ctx.fillStyle = rgba(GR, 0.6);
+    ctx.fillText(pick(DEV_CODELINES), 0, R * 0.5 + 18 + (G.time * 30 % 12));
+  }
 
   /* ---- additive GLOW pass ---- */
   ctx.globalCompositeOperation = 'lighter';
@@ -5910,6 +6242,8 @@ function render() {
     if (p.arm > 0) { ctx.fillStyle = rgba(p.color, 0.4); ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.4, 0, TAU); ctx.fill(); continue; } // telegraphing
     ctx.fillStyle = WH;
     if (p.kind === 'square') { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(G.time * 6); ctx.fillRect(-p.r * 0.5, -p.r * 0.5, p.r, p.r); ctx.restore(); }
+    else if (p.kind === 'code') { ctx.fillStyle = '#bfffce'; ctx.font = 'bold 13px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(p.glyph || '0', p.x, p.y); }   // P3: thrown code
+    else if (p.kind === 'hex') { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(G.time * 3); ctx.strokeStyle = WH; ctx.lineWidth = 2; poly(0, 0, p.r * 0.7, 6, 0); ctx.stroke(); ctx.restore(); }   // P3: curse bolt
     else { ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.5, 0, TAU); ctx.fill(); }
   }
   // player projectile cores
@@ -6192,21 +6526,23 @@ function drawHUD() {
     } else G.sigilUI = null;
   }
 
-  // P1: manuscript pages (the Developer's summon currency)
-  if (G.postgame && G.manuscripts > 0) {
+  // P1/P3: manuscript pages (the Developer's summon currency)
+  if (G.postgame && G.manuscripts > 0 && !G.devSummoned) {
     const mx = W - 56, my = H - (IS_TOUCH ? 148 : 72) - 74;
     const done = G.manuscripts >= DEV_MANUSCRIPTS;
-    const pl = done ? 0.7 + 0.3 * Math.sin(G.time * 5) : 0.5;
-    ctx.strokeStyle = rgba(done ? WH : '#cfcaff', pl); ctx.lineWidth = 2;
+    if (G.devUI) { G.devUI.x = mx; G.devUI.y = my; } else G.devUI = { x: mx, y: my, r: 22 };
+    const pl = done ? 0.6 + 0.4 * Math.sin(G.time * 5) : 0.5;
+    if (done) { ctx.fillStyle = rgba(GR, 0.18); ctx.beginPath(); ctx.arc(mx, my, 24, 0, TAU); ctx.fill(); }
+    ctx.strokeStyle = rgba(done ? '#39ff88' : '#cfcaff', pl); ctx.lineWidth = 2;
     ctx.strokeRect(mx - 9, my - 12, 18, 24);
     ctx.beginPath();
     ctx.moveTo(mx - 5, my - 6); ctx.lineTo(mx + 5, my - 6);
     ctx.moveTo(mx - 5, my); ctx.lineTo(mx + 5, my);
     ctx.moveTo(mx - 5, my + 6); ctx.lineTo(mx + 2, my + 6);
     ctx.stroke();
-    ctx.textAlign = 'center'; ctx.fillStyle = rgba(WH, 0.7); ctx.font = '700 10px Segoe UI, sans-serif';
-    ctx.fillText(G.manuscripts + '/' + DEV_MANUSCRIPTS, mx, my + 26);
-  }
+    ctx.textAlign = 'center'; ctx.fillStyle = rgba(done ? '#39ff88' : WH, done ? 0.95 : 0.7); ctx.font = '700 10px Segoe UI, sans-serif';
+    ctx.fillText(done ? (IS_TOUCH ? 'COMPILE' : 'G — COMPILE') : G.manuscripts + '/' + DEV_MANUSCRIPTS, mx, my + 28);
+  } else G.devUI = null;
 
   // P1: postgame veil — the world remembers the Architect
   if (G.postgame) {
@@ -6224,6 +6560,10 @@ function drawHUD() {
     ctx.fillStyle = 'rgba(64,44,6,0.18)'; ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = 'rgba(255,210,120,0.05)';
     for (let y = (G.time * 120) % 16; y < H; y += 16) ctx.fillRect(0, y, W, 1.5);
+  } else if (G.dimension === 'source') {
+    ctx.fillStyle = 'rgba(2,20,8,0.22)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(57,255,136,0.045)';
+    for (let y = (-G.time * 90) % 18; y < H; y += 18) ctx.fillRect(0, y, W, 1);
   }
   // GLITCH boss screen overlay (cheap channel-split scanlines)
   if (G.glitchFX > 0) {
@@ -6302,6 +6642,7 @@ function startGame() {
     mirrorIntel: { dashes: 0, moveSum: 0, moveN: 0 },   // B4: MIRROR has been watching since spawn
     postgame: false, manuscripts: 0, rifts: [], riftT: 6, postT: 0,   // P1 postgame state
     dimension: null, postBossT: 45, postBossNext: 'herald',           // P2 dimension fights
+    devSummoned: false, devRitual: null,                               // P3 THE DEVELOPER
     dashZoom: 0, trail: [], spores: [], focusTarget: null, dmgDir: null,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });
@@ -6312,6 +6653,7 @@ function startGame() {
   player.level = 1; player.xp = 0; player.xpNext = 6;
   player.invuln = 0; player.dashCD = 0; player.dashTime = 0;
   player.phoenixReady = false; player.sporeAcc = 0;
+  player.reversed = 0; player.devSlow = 0; player.bug = 0; player.bugTick = 0;   // P3 debuffs
   player.weapons = []; player.passives = {};
   player.stats = freshStats();
   recalc(); player.hp = player.maxHp;
