@@ -123,9 +123,11 @@ for every tunable. Zero console errors desktop + mobile.
       "/kill player" + green taunt + "Compiled by THE DEVELOPER / Exit code
       137"; title-screen logo glitch + persistent taunt (PROFILE.devTaunt)
       until you beat it; 10 rotating taunts
-- [ ] P5 Beat the Developer → special trophy power, then announced WAVE
-      survival mode (wave 1 small, scaling until you fall, wave number
-      announced at each start)
+- [x] P5 Developer victory → ROOT ACCESS + Survival (v4.7): trophy power
+      (+50% dmg / +25% AS / +12% move / +10% crit + free Phoenix), DEVELOPER
+      SLAIN badge, taunt cleared; announced wave survival (wave 1 ≈5, scaling
+      count/HP/dmg + widening roster, boss wave every 5th), HUD wave counter,
+      director/rift/roster-spawn all yield to waves
 
 ### Animations
 - [ ] A1 Animation excellence pass: player, weapons, enemies, every boss to

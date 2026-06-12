@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '4.6';
+const VERSION = '4.7';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -2196,6 +2196,10 @@ const ELITE_BASE_CHANCE  = 0.02;
 const ELITE_TIME_SCALE   = 0.004;
 const ELITE_CHANCE_MAX   = 0.07;
 function director(dt) {
+  // P5: once SURVIVAL begins, waves replace the normal director, the postgame
+  // rift scheduler, and roster-boss spawns entirely.
+  if (G.survival) { updateSurvival(dt); return; }
+
   const m = G.time / 60;
 
   // hidden signals (decay-windowed counters -> rates)
@@ -2455,6 +2459,67 @@ function spawnDeveloper() {
   if (Sound) { Sound.setIntensity(1); Sound.setMusicTempo(140); }
 }
 
+// P5: ROOT ACCESS — the trophy for beating THE DEVELOPER. A run-defining
+// permanent power-up plus a free Phoenix revive.
+function grantRootAccess(e) {
+  const S2 = player.stats;
+  S2.damageMul *= ROOT_DMG; S2.attackSpeedMul *= ROOT_AS;
+  S2.moveSpeedMul *= ROOT_MS; S2.crit = Math.min(1, S2.crit + ROOT_CRIT);
+  player.phoenixReady = true;                 // one free rise, on the house
+  recalc(); player.hp = player.maxHp;
+  G.bossBanner = { name: 'ROOT ACCESS GRANTED', sub: 'sudo survive — the swarm is yours to break', life: 4.0, max: 4.0 };
+  floater(e.x, e.y - e.r, 'YOU OWN THE SOURCE', WH, 28);
+  if (Sound) Sound.setMusicTempo(150);
+}
+
+// P5: WAVE SURVIVAL — the endgame after the Developer falls. Classic waves,
+// wave 1 small, each scaling up, announced at its start; runs until you fall.
+function enterSurvival() {
+  G.survival = { wave: 0, gap: SURV_FIRST_GAP, inWave: false };
+  G.rifts.length = 0;                          // the postgame rifts give way to waves
+}
+function survivalEnemyPool(n) {
+  const pool = ['grunt', 'rusher', 'orbiter'];
+  if (n >= 3) pool.push('shooter', 'splitter');
+  if (n >= 6) pool.push('tank', 'shielder');
+  if (n >= 9) pool.push('bomber', 'juggernaut');
+  return pool;
+}
+function startWave() {
+  const s = G.survival; s.wave++; s.inWave = true;
+  const n = s.wave;
+  // every Nth wave is a BOSS wave — a roster boss storms in instead of a horde
+  if (n % SURV_BOSS_EVERY === 0) {
+    G.bossBanner = { name: 'WAVE ' + n, sub: 'BRACE — A TITAN APPROACHES', life: 2.6, max: 2.6 };
+    spawnBoss(pick(BOSS_IDS));
+    sfx('boss');
+    return;
+  }
+  G.bossBanner = { name: 'WAVE ' + n, sub: 'BRACE', life: 2.2, max: 2.2 };
+  const count = Math.min(SURV_MAX, SURV_BASE + n * SURV_PER);
+  const pool = survivalEnemyPool(n);
+  const hpScale = 1 + n * SURV_HP_PER;
+  for (let i = 0; i < count; i++) {
+    const p = spawnRingPosition();
+    const en = spawnEnemy(pick(pool), p.x, p.y, {});
+    if (en) { en.hp *= hpScale; en.maxHp = en.hp; en.dmg *= 1 + n * SURV_DMG_PER; }
+  }
+  sfx('boss');
+}
+function updateSurvival(dt) {
+  const s = G.survival;
+  if (G.boss) return;                          // a wave-boss holds the wave open
+  if (s.inWave) {
+    // wave is cleared once no normal enemies remain
+    let alive = 0;
+    for (const en of G.enemies) if (!en.dead && !en.boss) { alive++; break; }
+    if (!alive) { s.inWave = false; s.gap = SURV_GAP; }
+    return;
+  }
+  s.gap -= dt;
+  if (s.gap <= 0) startWave();
+}
+
 function spawnArchitect() {
   bossSweepArena(0, 0, PU);
   const def = BOSSES.architect;
@@ -2658,6 +2723,12 @@ const DEV_KILL_CD = 9, DEV_KILL_TELE = 1.3, DEV_KILL_R = 150, DEV_KILL_N = 4;   
 const DEV_DIM_CD = 14;          // dimension hops (phase 3+)
 const DEV_ERASE_MUL = 0.62;     // final phase cooldown compression
 const MINIOVL_FIRE = 2.2, MINIOVL_RINGN = 10, MINIOVL_BSPD = 180;
+// P5 trophy + survival
+const ROOT_DMG = 1.5, ROOT_AS = 1.25, ROOT_MS = 1.12, ROOT_CRIT = 0.1;
+const SURV_FIRST_GAP = 4.0, SURV_GAP = 3.5;
+const SURV_BASE = 3, SURV_PER = 2, SURV_MAX = 64;          // wave 1 ≈ 5 enemies, scaling up
+const SURV_HP_PER = 0.12, SURV_DMG_PER = 0.05;
+const SURV_BOSS_EVERY = 5;
 const DEV_GLYPHS = ['{', '}', '(', ')', ';', '<', '>', '/', '*', '=', '#', '0', '1'];
 const DEV_CODELINES = ['while(true){', '  swarm.spawn();', '  if(player.dead)', '    return win;', '} catch(e){', '  player.kill();', 'function boss(){', '  throw You;', 'rm -rf /hope', 'sudo win=false'];
 
@@ -5348,6 +5419,17 @@ function killEnemy(e, reward) {
       PROFILE.stats.bossKills++;
       addCoins(BOSS_COINS_ARCH);
       floater(e.x, e.y - e.r - 30, '+' + BOSS_COINS_ARCH + ' ⬡', YE, 18);
+    } else if (e.bdef && e.bdef.id === 'developer') {
+      // P5: YOU BEAT THE DEVELOPER. Trophy power, taunt lifted, SURVIVAL begins.
+      G.hitstop = 0.35; G.flash = 1; G.flashColor = WH; G.shake = 1;
+      for (let k = 0; k < 6; k++)
+        G.particles.push({ x: e.x, y: e.y, vx: 0, vy: 0, r: e.r, mr: 320 + k * 280, life: 0.7 + k * 0.12, max: 0.7 + k * 0.12, color: [WH, GR, CY, YE, MA, WH][k], kind: 'ring' });
+      G.dimension = null;
+      PROFILE.stats.bossKills++; addCoins(e.bdef.bounty || 200);
+      PROFILE.devBeaten = true; PROFILE.devTaunt = false; saveProfile();
+      grantRootAccess(e);
+      spawnPickup(e.x, e.y, 'heal');
+      enterSurvival();
     } else if (e.bdef) {
       // any boss that raised node-units (e.g. OBELISK pylons) takes them down with it
       if (e.data && Array.isArray(e.data.pylons))
@@ -6378,6 +6460,11 @@ function drawHUD() {
   // kills + score (just under timer, centered)
   ctx.font = '700 13px Segoe UI, sans-serif'; ctx.fillStyle = rgba(CY, 0.95);
   ctx.fillText('☠ ' + G.kills + '   ◆ ' + G.score.toLocaleString(), W / 2, 46);
+  // P5: survival wave counter
+  if (G.survival) {
+    ctx.font = '800 14px Segoe UI, sans-serif'; ctx.fillStyle = rgba('#39ff88', 0.95);
+    ctx.fillText('⚑ SURVIVAL · WAVE ' + G.survival.wave, W / 2, 64);
+  }
 
   // combo
   if (G.combo >= 3) {
@@ -6643,6 +6730,7 @@ function startGame() {
     postgame: false, manuscripts: 0, rifts: [], riftT: 6, postT: 0,   // P1 postgame state
     dimension: null, postBossT: 45, postBossNext: 'herald',           // P2 dimension fights
     devSummoned: false, devRitual: null,                               // P3 THE DEVELOPER
+    survival: null,                                                    // P5 wave survival
     dashZoom: 0, trail: [], spores: [], focusTarget: null, dmgDir: null,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });

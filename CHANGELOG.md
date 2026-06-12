@@ -4,6 +4,22 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v4.7 — 2026-06-12 — Beat THE DEVELOPER → ROOT ACCESS + Survival
+
+The finale's reward, and the endless mode after it:
+
+- **ROOT ACCESS** (trophy): slaying the Developer grants a run-defining
+  permanent power — +50% damage, +25% attack speed, +12% move speed, +10%
+  crit — plus a free Phoenix revive. "sudo survive — the swarm is yours to
+  break." Clears the Developer's taunts and unlocks the **⌨ DEVELOPER SLAIN**
+  title badge.
+- **WAVE SURVIVAL:** the run rolls straight into classic announced waves.
+  Wave 1 is small (~5); each wave scales count, HP and damage; the enemy
+  roster widens as waves climb (rushers → shooters/splitters → tanks/
+  shielders → bombers/juggernauts). Every 5th wave is a **BOSS WAVE** — a
+  roster titan storms in. Each wave number is announced ("WAVE 7 · BRACE") and
+  shown live in the HUD. It runs until you finally fall.
+
 ## v4.6 — 2026-06-12 — If THE DEVELOPER kills you (Easter eggs)
 
 - Die to THE DEVELOPER and the run report glitches: the "YOU FELL" title
