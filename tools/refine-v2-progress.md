@@ -71,8 +71,9 @@ for every tunable. Zero console errors desktop + mobile.
       preservation, VFX tiers); SKINS registry (11 skins, 3 tiers) wired
       through drawPlayer/flames/halo/glow/dash-trail; buySkin/equipSkin
       persisted via PROFILE
-- [ ] S4 Title-screen SHOP with 10 creative skins — cheapest ≈ 10 bosses of
-      coins, flagship ≈ 100 bosses
+- [x] S4 THE HANGAR (v3.5): title-screen shop, 10 buyable skins + default,
+      live animated previews, buy/equip/equipped states, coin balance,
+      Esc-close + key guard; prices 100→1000⬡
 ### Bosses — elevate ALL to Architect standard
 - [ ] B1 SENTINEL TRINITY — three coordinated bodies, Architect-grade
       animation + telegraphs; drops a unique relic/glyph

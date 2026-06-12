@@ -4,6 +4,16 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v3.5 — 2026-06-12 — THE HANGAR (skin shop)
+
+- New **⬡ HANGAR** button beside PLAY opens the shop overlay: 11 skin cards
+  with LIVE animated previews (each card runs the real hull renderer — flames,
+  hue-cycling, regalia rings), tier labels, prices, and your coin balance.
+- BUY auto-equips (disabled until affordable); EQUIP/EQUIPPED states; the
+  equipped card glows. Everything persists through the profile.
+- Keyboard safety: while the HANGAR is open, Enter/Space can't start a run
+  underneath it; Escape closes.
+
 ## v3.4 — 2026-06-12 — Skin system (research-grounded)
 
 Data-driven cosmetic layer over the player render, built on 2D-skin best

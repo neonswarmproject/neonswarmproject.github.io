@@ -298,6 +298,33 @@ html, body {
 @media (max-height: 680px) { .ad-bottom { display: none; } }
 @media (max-height: 560px) { .ad-top { display: none; } }
 
+/* S4 (v3.5) — THE HANGAR skin shop */
+.shop-panel { width: min(880px, 96vw); }
+.shop-coins { color: var(--yellow); font-weight: 900; }
+.shop-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px; margin: 14px 0 16px; max-height: 56vh; overflow: auto; padding: 4px;
+}
+.skin-card {
+  position: relative; border-radius: 14px; padding: 10px 8px 12px;
+  background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.skin-card.equipped { border-color: var(--cyan); box-shadow: 0 0 14px rgba(25,240,255,.25); }
+.skin-card canvas { width: 72px; height: 72px; }
+.skin-name { font-weight: 800; font-size: 13px; }
+.skin-tier { font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: #8f8cc4; }
+.skin-desc { font-size: 10.5px; color: #a9a6d8; min-height: 26px; text-align: center; }
+.skin-btn {
+  margin-top: 4px; padding: 6px 14px; border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.25);
+  background: rgba(255,255,255,.07); color: #fff;
+  font: 700 11px/1 'Segoe UI', sans-serif; cursor: pointer; letter-spacing: .06em;
+}
+.skin-btn:not(:disabled):hover { background: rgba(255,255,255,.16); }
+.skin-btn:disabled { opacity: .45; cursor: default; }
+.skin-btn.equip { border-color: var(--cyan); color: var(--cyan); }
+
 /* reduce motion */
 @media (prefers-reduced-motion: reduce) {
   .overlay, .panel, .newbest { animation: none; }

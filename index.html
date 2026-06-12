@@ -44,7 +44,10 @@
       <div class="panel title-panel">
         <h1 class="logo">NEON<span>SWARM</span></h1>
         <p class="tagline">Survive the endless swarm. Evolve. Become the storm.</p>
-        <button class="bigbtn" id="btnPlay">▶ PLAY</button>
+        <div class="btnrow">
+          <button class="bigbtn" id="btnPlay">▶ PLAY</button>
+          <button class="bigbtn ghost" id="btnShop">⬡ HANGAR</button>
+        </div>
         <div class="hi" id="titleHi"></div>
         <div class="controls-help">
           <div class="ch-row"><b>Move</b><span>WASD / Arrows / Drag</span></div>
@@ -75,6 +78,16 @@
           <button class="bigbtn" id="btnResume">▶ Resume</button>
           <button class="bigbtn ghost" id="btnQuit">Main Menu</button>
         </div>
+      </div>
+    </div>
+
+    <!-- HANGAR (skin shop) -->
+    <div class="overlay" id="shop">
+      <div class="panel shop-panel">
+        <h2 class="lvl-title">THE HANGAR</h2>
+        <p class="lvl-sub">Boss bounties buy paint · <span id="shopCoins" class="shop-coins"></span></p>
+        <div class="shop-grid" id="shopGrid"></div>
+        <button class="bigbtn ghost" id="btnShopClose">← Back</button>
       </div>
     </div>
 

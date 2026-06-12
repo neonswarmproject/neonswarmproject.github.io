@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '3.4';
+const VERSION = '3.5';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -395,6 +395,11 @@ function key(e, down) {
     if (k === 'f') return toggleFull();
 
     if (G.state === 'title') {
+      // S4: while the HANGAR is open, keys must not start a run underneath it
+      if (overlays.shop && overlays.shop.classList.contains('show')) {
+        if (k === 'Escape') showTitle();
+        return;
+      }
       if (k === 'Enter' || k === ' ') startGame();
       return;
     }
@@ -4794,6 +4799,7 @@ const overlays = {
   levelup: document.getElementById('levelup'),
   pause: document.getElementById('pause'),
   gameover: document.getElementById('gameover'),
+  shop: document.getElementById('shop'),
 };
 function hideOverlays() { for (const k in overlays) overlays[k].classList.remove('show'); }
 function showOverlay(id) { hideOverlays(); overlays[id].classList.add('show'); }
@@ -4879,6 +4885,88 @@ function toTitle() {
   G.enemies.length = 0; G.particles.length = 0;
   showTitle();
 }
+
+/* ---- S4 (v3.5): THE HANGAR — title-screen skin shop ---- */
+const shopGridEl = document.getElementById('shopGrid');
+const shopCoinsEl = document.getElementById('shopCoins');
+let shopAnim = null;
+function drawMiniSkin(cv, id, t) {
+  const sk = SKINS[id], c2 = cv.getContext('2d');
+  const w = cv.width, h = cv.height, s = w / 72;
+  c2.clearRect(0, 0, w, h);
+  c2.save(); c2.translate(w / 2, h / 2); c2.rotate(-Math.PI / 2); c2.scale(1.7 * s, 1.7 * s);
+  const fl = 10 + Math.sin(t * 14) * 2;
+  c2.fillStyle = rgba(sk.flameA, 0.85);
+  c2.beginPath(); c2.moveTo(-8, 4.5); c2.lineTo(-8 - fl, 0); c2.lineTo(-8, -4.5); c2.closePath(); c2.fill();
+  c2.fillStyle = rgba(sk.flameB, 0.9);
+  c2.beginPath(); c2.moveTo(-8, 2.5); c2.lineTo(-8 - fl * 0.55, 0); c2.lineTo(-8, -2.5); c2.closePath(); c2.fill();
+  c2.shadowColor = sk.glow; c2.shadowBlur = 12;
+  c2.fillStyle = sk.hueCycle
+    ? `hsla(${Math.floor((t * 60) % 360)},100%,65%,${0.9 * (sk.alpha || 1)})`
+    : rgba(sk.body, 0.9 * (sk.alpha || 1));
+  c2.strokeStyle = sk.stroke; c2.lineWidth = 2;
+  c2.beginPath(); c2.moveTo(16, 0); c2.lineTo(-11, 10); c2.lineTo(-6, 0); c2.lineTo(-11, -10);
+  c2.closePath(); c2.fill(); c2.stroke();
+  c2.shadowBlur = 0;
+  c2.restore();
+  if (sk.extras) {
+    c2.save(); c2.translate(w / 2, h / 2);
+    c2.strokeStyle = rgba(sk.extras === 'sigil' ? '#ffd700' : PU, 0.7);
+    c2.lineWidth = 1.5 * s;
+    c2.beginPath();
+    for (let k = 0; k <= 6; k++) {
+      const a = t * 0.9 + k / 6 * TAU, px2 = Math.cos(a) * 30 * s, py2 = Math.sin(a) * 30 * s;
+      k === 0 ? c2.moveTo(px2, py2) : c2.lineTo(px2, py2);
+    }
+    c2.closePath(); c2.stroke();
+    c2.restore();
+  }
+}
+function buildShop() {
+  shopCoinsEl.textContent = '⬡ ' + PROFILE.coins.toLocaleString();
+  shopGridEl.innerHTML = '';
+  const tierName = ['STANDARD', 'T1 · PAINT', 'T2 · VFX', 'T3 · REGALIA'];
+  for (const id of SKIN_IDS) {
+    const sk = SKINS[id];
+    const owned = PROFILE.skins.owned.includes(id);
+    const equipped = PROFILE.skins.equipped === id;
+    const card = document.createElement('div');
+    card.className = 'skin-card' + (equipped ? ' equipped' : '');
+    const cv = document.createElement('canvas');
+    cv.width = 144; cv.height = 144; cv.dataset.skin = id;
+    card.appendChild(cv);
+    const tier = document.createElement('div'); tier.className = 'skin-tier'; tier.textContent = tierName[sk.tier];
+    const nm = document.createElement('div'); nm.className = 'skin-name'; nm.textContent = sk.name;
+    nm.style.color = (sk.hueCycle || sk.body === '#120821' || sk.body === '#2a1408') ? sk.stroke : sk.body;
+    const ds = document.createElement('div'); ds.className = 'skin-desc'; ds.textContent = sk.desc;
+    const btn = document.createElement('button'); btn.className = 'skin-btn';
+    if (equipped) { btn.textContent = 'EQUIPPED'; btn.disabled = true; btn.classList.add('equip'); }
+    else if (owned) {
+      btn.textContent = 'EQUIP'; btn.classList.add('equip');
+      btn.onclick = () => { equipSkin(id); sfx('select'); buildShop(); };
+    } else {
+      btn.textContent = '⬡ ' + sk.price.toLocaleString();
+      btn.disabled = PROFILE.coins < sk.price;
+      btn.onclick = () => { if (buySkin(id)) { equipSkin(id); sfx('levelup'); } buildShop(); };
+    }
+    card.appendChild(tier); card.appendChild(nm); card.appendChild(ds); card.appendChild(btn);
+    shopGridEl.appendChild(card);
+  }
+}
+function shopFrame() {
+  if (!overlays.shop.classList.contains('show')) { shopAnim = null; return; }
+  const t = performance.now() / 1000;
+  for (const cv of shopGridEl.querySelectorAll('canvas')) drawMiniSkin(cv, cv.dataset.skin, t);
+  shopAnim = requestAnimationFrame(shopFrame);
+}
+function openShop() {
+  buildShop();
+  showOverlay('shop');
+  if (!shopAnim) shopAnim = requestAnimationFrame(shopFrame);
+  sfx('select');
+}
+document.getElementById('btnShop').addEventListener('click', openShop);
+document.getElementById('btnShopClose').addEventListener('click', () => { showTitle(); sfx('select'); });
 
 function showTitle() {
   const b = G.best;
