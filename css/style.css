@@ -325,7 +325,27 @@ html, body {
 .skin-btn:disabled { opacity: .45; cursor: default; }
 .skin-btn.equip { border-color: var(--cyan); color: var(--cyan); }
 
+/* P4 — THE DEVELOPER's taunts + glitch */
+.dev-taunt {
+  display: none; color: #39ff88; font-weight: 800;
+  font-family: 'Courier New', monospace; letter-spacing: .04em;
+  margin: 6px 0 12px; font-size: 14px; text-shadow: 0 0 10px rgba(57,255,136,.6);
+}
+.dev-taunt.show { display: block; }
+.glitch {
+  position: relative; animation: glitchShift .9s infinite steps(2);
+}
+.glitch::before, .glitch::after {
+  content: attr(data-text); position: absolute; left: 0; top: 0; width: 100%;
+  opacity: .8; pointer-events: none;
+}
+.glitch::before { color: #ff2d9b; transform: translate(2px, -1px); clip-path: inset(0 0 55% 0); }
+.glitch::after  { color: #19f0ff; transform: translate(-2px, 1px); clip-path: inset(55% 0 0 0); }
+@keyframes glitchShift { 0%{transform:translate(0,0)} 25%{transform:translate(-2px,1px)} 50%{transform:translate(2px,-1px)} 75%{transform:translate(-1px,-1px)} }
+.logo.glitch span { color: #ff2d9b; }
+
 /* reduce motion */
 @media (prefers-reduced-motion: reduce) {
-  .overlay, .panel, .newbest { animation: none; }
+  .overlay, .panel, .newbest, .glitch { animation: none; }
+  .glitch::before, .glitch::after { display: none; }
 }

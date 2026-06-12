@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '4.5';
+const VERSION = '4.6';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -6666,11 +6666,26 @@ function startGame() {
   if (Sound) { Sound.startMusic(); Sound.setIntensity(0); Sound.setMusicTempo(112); }
 }
 
+// P4: THE DEVELOPER's taunts (English — the game is in English)
+const DEV_TAUNTS = [
+  'Thought you could beat me?',
+  'Forgot who codes this game?',
+  'I wrote your death in a for-loop.',
+  'git commit -m "player removed"',
+  'You were never the main character.',
+  'Skill issue. Recompiling the swarm.',
+  'Did you read the source? I did.',
+  'Nice try. Patch notes: you, nerfed.',
+  '// TODO: let them win (won\'t fix)',
+  'Segmentation fault (you dumped).',
+];
 function gameOver() {
   G.state = 'gameover';
   goShownAt = performance.now();
   sfx('gameover');
   if (Sound) Sound.stopMusic();
+  // P4: were you killed BY THE DEVELOPER? (or by anything while it was loose)
+  const byDev = !!(G.boss && G.boss.bdef && G.boss.bdef.id === 'developer');
   const cur = { score: G.score, time: Math.floor(G.time), kills: G.kills, level: player.level };
   const prevBest = G.best.score || 0;
   const isBest = cur.score > prevBest;
@@ -6678,11 +6693,29 @@ function gameOver() {
   document.getElementById('newBest').classList.toggle('show', isBest);
   // "how close was this run" (Section L): score as a % of the previous best
   const vsBest = isBest ? 'NEW BEST' : (prevBest ? Math.round(cur.score / prevBest * 100) + '% of best' : '—');
-  document.getElementById('overStats').innerHTML = statGrid([
-    ['Survived', fmtTime(cur.time)], ['Level', cur.level],
-    ['Kills', cur.kills], ['Score', cur.score.toLocaleString()],
-    ['Best Score', (G.best.score || 0).toLocaleString()], ['This Run', vsBest],
-  ]);
+  const goTitle = document.getElementById('goTitle');
+  const taunt = document.getElementById('devTaunt');
+  const panel = document.getElementById('overPanel');
+  if (byDev) {
+    PROFILE.devTaunt = true; saveProfile();          // the title screen remembers
+    goTitle.textContent = '/kill player'; goTitle.dataset.text = '/kill player';
+    goTitle.classList.add('glitch');
+    taunt.textContent = pick(DEV_TAUNTS); taunt.classList.add('show');
+    panel.classList.add('glitch-host');
+    document.getElementById('overStats').innerHTML = statGrid([
+      ['Survived', fmtTime(cur.time)], ['Level', cur.level],
+      ['Compiled by', 'THE DEVELOPER'], ['Exit code', '137'],
+      ['Best Score', (G.best.score || 0).toLocaleString()], ['This Run', vsBest],
+    ]);
+  } else {
+    goTitle.textContent = 'YOU FELL'; goTitle.dataset.text = 'YOU FELL';
+    goTitle.classList.remove('glitch'); taunt.classList.remove('show');
+    document.getElementById('overStats').innerHTML = statGrid([
+      ['Survived', fmtTime(cur.time)], ['Level', cur.level],
+      ['Kills', cur.kills], ['Score', cur.score.toLocaleString()],
+      ['Best Score', (G.best.score || 0).toLocaleString()], ['This Run', vsBest],
+    ]);
+  }
   showOverlay('gameover');
 }
 function statGrid(rows) {
@@ -6796,7 +6829,17 @@ function showTitle() {
   document.getElementById('titleHi').textContent =
     (b.score ? `Best: ${b.score.toLocaleString()} pts · ${fmtTime(b.time)} survived` : 'No record yet — set one.') +
     (PROFILE.coins > 0 ? `  ·  ⬡ ${PROFILE.coins.toLocaleString()}` : '') +
-    (META.architectSlain ? '  ·  ◆ ARCHITECT SLAIN' : '');
+    (PROFILE.devBeaten ? '  ·  ⌨ DEVELOPER SLAIN' : META.architectSlain ? '  ·  ◆ ARCHITECT SLAIN' : '');
+  // P4: if THE DEVELOPER has beaten you (and you haven't beaten it back),
+  // it has tampered with the main screen.
+  const logo = document.getElementById('logo');
+  const tt = document.getElementById('titleTaunt');
+  if (PROFILE.devTaunt && !PROFILE.devBeaten) {
+    logo.classList.add('glitch'); logo.dataset.text = 'NEONSWARM';
+    tt.textContent = '> ' + pick(DEV_TAUNTS); tt.classList.add('show');
+  } else {
+    logo.classList.remove('glitch'); tt.classList.remove('show');
+  }
   showOverlay('title');
 }
 

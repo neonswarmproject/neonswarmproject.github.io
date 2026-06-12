@@ -42,8 +42,9 @@
       <div class="ad-rect ad-left"   id="adLeft"></div>
       <div class="ad-rect ad-right"  id="adRight"></div>
       <div class="panel title-panel">
-        <h1 class="logo">NEON<span>SWARM</span></h1>
+        <h1 class="logo" id="logo">NEON<span>SWARM</span></h1>
         <p class="tagline">Survive the endless swarm. Evolve. Become the storm.</p>
+        <p class="dev-taunt" id="titleTaunt"></p>
         <div class="btnrow">
           <button class="bigbtn" id="btnPlay">▶ PLAY</button>
           <button class="bigbtn ghost" id="btnShop">⬡ HANGAR</button>
@@ -93,8 +94,9 @@
 
     <!-- GAME OVER -->
     <div class="overlay" id="gameover">
-      <div class="panel">
-        <h2 class="lvl-title go-title">YOU FELL</h2>
+      <div class="panel" id="overPanel">
+        <h2 class="lvl-title go-title" id="goTitle" data-text="YOU FELL">YOU FELL</h2>
+        <p class="dev-taunt" id="devTaunt"></p>
         <div class="stat-grid" id="overStats"></div>
         <div class="newbest" id="newBest">★ NEW BEST ★</div>
         <button class="bigbtn" id="btnAgain">▶ Run it back</button>

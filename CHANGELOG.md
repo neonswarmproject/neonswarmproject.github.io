@@ -4,6 +4,17 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v4.6 — 2026-06-12 — If THE DEVELOPER kills you (Easter eggs)
+
+- Die to THE DEVELOPER and the run report glitches: the "YOU FELL" title
+  becomes a chromatic-aberration **`/kill player`**, a green monospace taunt
+  appears ("Forgot who codes this game?", "git commit -m \"player removed\"",
+  "// TODO: let them win (won't fix)", "Segmentation fault (you dumped)" …),
+  and the stat grid reads "Compiled by THE DEVELOPER · Exit code 137".
+- It then **tampers with the title screen**: the NEONSWARM logo glitches and a
+  taunt sits under the tagline — persisting across launches until you beat it.
+- All of it clears the moment you slay the Developer (sets DEVELOPER SLAIN).
+
 ## v4.5 — 2026-06-12 — THE DEVELOPER (the final boss)
 
 Collect 10 manuscripts (the Architect drops 3; postgame bosses and rifts

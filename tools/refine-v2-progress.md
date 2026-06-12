@@ -119,9 +119,10 @@ for every tunable. Zero console errors desktop + mobile.
       teleport, quad compile-beams, gap rings, dimension hops, /kill zones,
       5-phase ladder (SYNTAX→KERNEL PANIC) w/ ERASE compression; code-faced
       hull animation; 200⬡ bounty. (P4 taunts / P5 survival next.)
-- [ ] P4 Developer kills you → Easter eggs on title screen + run report:
-      English taunts ("Thought you could beat me?", "Forgot who codes this
-      game?"), glitch/bug effects, mock "/kill player", more
+- [x] P4 Developer-death Easter eggs (v4.6): run report glitches to
+      "/kill player" + green taunt + "Compiled by THE DEVELOPER / Exit code
+      137"; title-screen logo glitch + persistent taunt (PROFILE.devTaunt)
+      until you beat it; 10 rotating taunts
 - [ ] P5 Beat the Developer → special trophy power, then announced WAVE
       survival mode (wave 1 small, scaling until you fall, wave number
       announced at each start)
