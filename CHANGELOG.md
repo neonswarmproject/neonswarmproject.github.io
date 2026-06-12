@@ -4,6 +4,15 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v3.2 — 2026-06-12 — Persistent profile (save system)
+
+- New consolidated localStorage profile (`neonswarm.profile.v1`): **coins**,
+  **owned/equipped skins**, lifetime stats (boss kills, runs). Defensive
+  loader sanitizes corrupt/missing data; every mutation persists immediately.
+- Legacy keys keep working untouched (best run record, meta unlocks) — old
+  records survive.
+- Title screen shows your coin balance next to the best-run line.
+
 ## v3.1 — 2026-06-12 — Enemy combat-buff drops
 
 Normal enemies now rarely drop three new 8-second buffs (HUD icons with time

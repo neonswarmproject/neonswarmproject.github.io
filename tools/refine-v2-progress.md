@@ -62,8 +62,9 @@ for every tunable. Zero console errors desktop + mobile.
       unique pickup glyphs, cumulative drop roll after heal/magnet/bomb
 
 ### Save, shop & skins
-- [ ] S1 Persistent save (localStorage): coins, owned/equipped skins, record,
-      meta unlocks survive closing the game
+- [x] S1 Persistent save (v3.2): PROFILE module (neonswarm.profile.v1) —
+      coins, owned/equipped skins, lifetime stats; defensive loader; legacy
+      best/meta keys untouched; coin balance on title screen
 - [ ] S2 Coins from boss kills (Architect and, later, Developer pay the most)
 - [ ] S3 Skin system research + design (how 2D games do skins well), then the
       skin layer over the player render (palette/trail/shape/FX)

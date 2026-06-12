@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '3.1';
+const VERSION = '3.2';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -290,6 +290,29 @@ function saveBest(b) { try { localStorage.setItem('neonswarm.best', JSON.stringi
 function loadMeta() { try { return JSON.parse(localStorage.getItem('neonswarm.meta')) || {}; } catch (e) { return {}; } }
 function saveMeta(m) { try { localStorage.setItem('neonswarm.meta', JSON.stringify(m)); } catch (e) {} }
 const META = loadMeta();
+
+/* ---- S1 (v3.2): persistent player PROFILE — coins, skins, lifetime stats.
+   The run record keeps its legacy key (neonswarm.best) and meta unlocks keep
+   neonswarm.meta; this consolidates everything new, so coins and skins
+   survive closing the game. Every mutation goes through saveProfile(). ---- */
+const PROFILE_KEY = 'neonswarm.profile.v1';
+function loadProfile() {
+  let p = null;
+  try { p = JSON.parse(localStorage.getItem(PROFILE_KEY) || 'null'); } catch (e) {}
+  if (!p || typeof p !== 'object') p = {};
+  p.coins = Math.max(0, p.coins | 0);
+  p.skins = (p.skins && typeof p.skins === 'object') ? p.skins : {};
+  p.skins.owned = Array.isArray(p.skins.owned) ? p.skins.owned : ['default'];
+  if (!p.skins.owned.includes('default')) p.skins.owned.unshift('default');
+  p.skins.equipped = (typeof p.skins.equipped === 'string') ? p.skins.equipped : 'default';
+  p.stats = (p.stats && typeof p.stats === 'object') ? p.stats : {};
+  p.stats.bossKills = p.stats.bossKills | 0;
+  p.stats.runs = p.stats.runs | 0;
+  return p;
+}
+const PROFILE = loadProfile();
+function saveProfile() { try { localStorage.setItem(PROFILE_KEY, JSON.stringify(PROFILE)); } catch (e) {} }
+function addCoins(n) { PROFILE.coins = Math.max(0, PROFILE.coins + n); saveProfile(); }
 
 /* ===========================================================================
    5. INPUT
@@ -4720,6 +4743,7 @@ function startGame() {
   // permanent meta unlock: slaying THE ARCHITECT grants a head start every run
   if (META.architectSlain) { G.rerolls += 1; player.stats.damageMul *= META_ARCH_DMG; }
   G.cam.x = 0; G.cam.y = 0;
+  PROFILE.stats.runs++; saveProfile();
   hideOverlays();
   if (Sound) { Sound.startMusic(); Sound.setIntensity(0); Sound.setMusicTempo(112); }
 }
@@ -4771,6 +4795,7 @@ function showTitle() {
   const b = G.best;
   document.getElementById('titleHi').textContent =
     (b.score ? `Best: ${b.score.toLocaleString()} pts · ${fmtTime(b.time)} survived` : 'No record yet — set one.') +
+    (PROFILE.coins > 0 ? `  ·  ⬡ ${PROFILE.coins.toLocaleString()}` : '') +
     (META.architectSlain ? '  ·  ◆ ARCHITECT SLAIN' : '');
   showOverlay('title');
 }
