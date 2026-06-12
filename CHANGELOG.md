@@ -4,6 +4,25 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v2.9 — 2026-06-12 — Five late-game abilities
+
+The "super-dash" idea is split in two, plus three more — all unlock-gated
+(boss count / time fallback) with the same TECH UNLOCKED announcements and
+LATE TECH card tags as the v2.8 weapons:
+
+- **🚀 Overdrive Thrusters** (max 3): dash flies 35% farther and cools 15%
+  faster per rank.
+- **🍄 Spore Wake** (max 3): the dash sows a toxic spore trail that ticks
+  enemies crossing it; higher ranks linger longer and hit harder.
+- **💢 Backlash Core** (max 3): every real hit you take detonates a
+  retaliatory nova around you.
+- **🩸 Adrenal Loop** (max 3): every kill shaves 0.1s/rank off the dash
+  cooldown — dash builds chain through crowds.
+- **👻 Ghost Protocol** (max 3): +25%/rank invulnerability time from dashes
+  and post-hit i-frames.
+- New stat plumbing: dashRangeMul, dashCdMul, sporeLv, backlashLv,
+  dashKillCd, invulnMul in freshStats; dash/hurt/kill hooks consume them.
+
 ## v2.8 — 2026-06-12 — Five late-game weapons
 
 New tech is gated out of the early card pool (`unlock()` per weapon: boss

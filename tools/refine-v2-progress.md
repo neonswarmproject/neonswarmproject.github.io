@@ -50,9 +50,10 @@ for every tunable. Zero console errors desktop + mobile.
       latch drill), Temporal Echo (damage-echo bursts), Kinetic Verdict
       (dash slam cone). unlock() gates + floater announcements + LATE TECH
       card tag.
-- [ ] C6 Five NEW abilities, late-game unlocks — split super-dash into two
-      (longer dash + shorter cooldown; damaging spore-trail dash) + invent
-      three more in that spirit
+- [x] C6 Five NEW late-game abilities (v2.9): Overdrive Thrusters (dash range
+      + cd), Spore Wake (toxic dash trail), Backlash Core (hit-retaliation
+      nova), Adrenal Loop (kills refund dash cd), Ghost Protocol (+i-frame
+      time). Same unlock-gate + announcement system as C5.
 - [ ] C7 Maxable extra-life ability: at max rank grants ONE extra life for the
       rest of the run; if that life is consumed the ability resets to rank 0
       and must be refilled

@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '2.8';
+const VERSION = '2.9';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -101,6 +101,10 @@ const DASH_TIME = 0.16, DASH_CD = 1.5, DASH_SPEED_MUL = 4.2, DASH_IFRAME = 0.28;
 const DASH_VEL_CARRY = 0.45;   // dash momentum kept when the dash ends
 const DASH_ZOOM = 0.06;        // camera punch-in while dashing
 const DASH_TRAIL_LIFE = 0.22;  // s each afterimage ghost lives
+// C6 (v2.9) late-game ability tunables
+const SPORE_DROP_EVERY = 0.03; // s between spore drops while dashing
+const SPORE_LIFE = 1.4, SPORE_R = 34, SPORE_DPS = 22, SPORE_CAP = 40;
+const BACKLASH_R = 170, BACKLASH_DMG = 38;
 const CAM_LERP = 0.12;         // smooth camera follow (never snaps)
 
 /* ===========================================================================
@@ -541,6 +545,8 @@ function freshStats() {
     damageMul: 1, attackSpeedMul: 1, areaMul: 1, projSpeedMul: 1, projDurMul: 1,
     moveSpeedMul: 1, maxHpBonus: 0, regen: 0, armor: 0,
     crit: 0.03, critMult: 2, xpGain: 1, pickup: 95, luck: 0,
+    // C6 late-game ability stats
+    dashRangeMul: 1, dashCdMul: 1, sporeLv: 0, backlashLv: 0, dashKillCd: 0, invulnMul: 1,
   };
 }
 
@@ -549,9 +555,9 @@ function tryDash() {
   const mv = moveVector();
   let d = (mv.mag > 0) ? { x: mv.x, y: mv.y } : { x: Math.cos(player.aim), y: Math.sin(player.aim) };
   player.dashDir = d;
-  player.dashTime = DASH_TIME;
-  player.dashCD = DASH_CD;
-  player.invuln = Math.max(player.invuln, DASH_IFRAME);
+  player.dashTime = DASH_TIME * S().dashRangeMul;   // C6 Overdrive Thrusters
+  player.dashCD = DASH_CD * S().dashCdMul;
+  player.invuln = Math.max(player.invuln, DASH_IFRAME * S().invulnMul);
   sfx('dash');
   for (let i = 0; i < 14; i++)
     spawnParticle(player.x, player.y, -d.x * rand(40, 160) + rand(-40, 40), -d.y * rand(40, 160) + rand(-40, 40), rand(0.2, 0.4), rand(2, 4), CY, 'spark');
@@ -565,7 +571,7 @@ function hurtPlayer(dmg, srcX, srcY) {
   player.hp -= real;
   G.dirDps += real;                       // feeds the hidden stress signal
   if (srcX !== undefined) G.dmgDir = { a: angTo(player.x, player.y, srcX, srcY), t: DMG_IND_T };
-  player.invuln = 0.75;
+  player.invuln = 0.75 * S().invulnMul;             // C6 Ghost Protocol
   G.shake = Math.min(1, G.shake + 0.5);
   G.flash = 0.6; G.flashColor = RD;
   G.hitstop = Math.max(G.hitstop, 0.06);
@@ -574,6 +580,18 @@ function hurtPlayer(dmg, srcX, srcY) {
   spawnRing(player.x, player.y, player.r, player.r * 4, 0.35, RD);
   for (let i = 0; i < 18; i++)
     spawnParticle(player.x, player.y, rand(-180, 180), rand(-180, 180), rand(0.2, 0.5), rand(2, 4), RD, 'spark');
+  // C6 Backlash Core: every real hit answers with a retaliatory nova
+  if (S().backlashLv > 0) {
+    const br = BACKLASH_R * Math.sqrt(S().areaMul);
+    const bdm = S().backlashLv * BACKLASH_DMG * S().damageMul;
+    grid.query(player.x, player.y, br, _wq);
+    for (let i = 0; i < _wq.length; i++) {
+      const e = _wq[i]; if (e.dead) continue;
+      if (dist2(player.x, player.y, e.x, e.y) < (br + e.r) ** 2)
+        damageEnemy(e, bdm, { kbx: e.x - player.x, kby: e.y - player.y, kb: 260, color: RD });
+    }
+    G.particles.push({ x: player.x, y: player.y, vx: 0, vy: 0, r: 12, mr: br, life: 0.4, max: 0.4, color: RD, kind: 'ring' });
+  }
   if (player.hp <= 0) { player.hp = 0; gameOver(); }
 }
 
@@ -1696,6 +1714,23 @@ const PASSIVES = {
   armor:    { name: 'Plating',   icon: '🛡', color: BL, max: 9, desc: '+2 Armor (flat soak).',     apply() { S().armor += 2; } },
   focus:    { name: 'Focus',     icon: '🎯', color: OR, max: 9, desc: '+8% Crit, +0.3 crit mult.', apply() { S().crit += 0.08; S().critMult += 0.3; } },
   luck:     { name: 'Fortune',   icon: '🍀', color: YE, max: 7, desc: 'Extra rerolls &amp; better upgrade choices.', apply() { S().luck += 1; G.rerolls += 1; } },
+  // C6 (v2.9): five LATE-GAME abilities — unlock-gated like the C5 weapons.
+  // The old "super-dash" idea is split into Overdrive Thrusters + Spore Wake.
+  overdash: { name: 'Overdrive Thrusters', icon: '🚀', color: CY, max: 3, unlock: () => G.bossNum >= 2 || G.time >= 300,
+    desc: 'Dash flies 35% farther &amp; cools 15% faster.',
+    apply() { S().dashRangeMul *= 1.35; S().dashCdMul *= 0.85; } },
+  spore:    { name: 'Spore Wake', icon: '🍄', color: GR, max: 3, unlock: () => G.bossNum >= 2 || G.time >= 300,
+    desc: 'Your dash sows a toxic spore trail.',
+    apply() { S().sporeLv += 1; } },
+  backlash: { name: 'Backlash Core', icon: '💢', color: RD, max: 3, unlock: () => G.bossNum >= 3 || G.time >= 420,
+    desc: 'Taking a hit detonates a retaliatory nova.',
+    apply() { S().backlashLv += 1; } },
+  adrenal:  { name: 'Adrenal Loop', icon: '🩸', color: OR, max: 3, unlock: () => G.bossNum >= 3 || G.time >= 420,
+    desc: 'Every kill shaves 0.1s off your dash cooldown.',
+    apply() { S().dashKillCd += 0.1; } },
+  ghost:    { name: 'Ghost Protocol', icon: '👻', color: PU, max: 3, unlock: () => G.bossNum >= 4 || G.time >= 540,
+    desc: '+25% invulnerability time from dashes &amp; hits.',
+    apply() { S().invulnMul *= 1.25; } },
 };
 const PASSIVE_IDS = Object.keys(PASSIVES);
 
@@ -1728,6 +1763,7 @@ function buildChoices() {
   // passives
   for (const id of PASSIVE_IDS) {
     const lv = player.passives[id] || 0;
+    if (PASSIVES[id].unlock && !PASSIVES[id].unlock()) continue;   // C6: late tech stays locked
     if (lv < PASSIVES[id].max) pool.push({ kind: 'passive', id, weight: 7 });
   }
   // weighted pick of 3 distinct
@@ -1777,7 +1813,7 @@ function cardData(c) {
   // add area" bug). Fixed in v2.
   if (c.kind === 'weapon-new') { const d = WEAPONS[c.id]; return { icon: d.icon, name: d.name, color: d.color, type: d.unlock ? 'New Weapon · LATE TECH' : 'New Weapon', desc: d.info(0), level: 0, max: d.max, isNew: true }; }
   if (c.kind === 'weapon-up')  { const d = WEAPONS[c.id]; const w = player.weapons.find(w => w.id === c.id); return { icon: d.icon, name: d.name, color: d.color, type: 'Weapon · Lv ' + (w.level + 1), desc: d.info(w.level), level: w.level, max: d.max }; }
-  if (c.kind === 'passive')    { const d = PASSIVES[c.id]; const lv = player.passives[c.id] || 0; return { icon: d.icon, name: d.name, color: d.color, type: 'Passive · Lv ' + (lv + 1), desc: d.desc, level: lv, max: d.max }; }
+  if (c.kind === 'passive')    { const d = PASSIVES[c.id]; const lv = player.passives[c.id] || 0; return { icon: d.icon, name: d.name, color: d.color, type: (d.unlock ? 'LATE TECH · ' : 'Passive · ') + 'Lv ' + (lv + 1), desc: d.desc, level: lv, max: d.max }; }
   return { icon: '✨', name: 'Power Surge', color: WH, type: 'Bonus', desc: '+8% damage &amp; full heal.', level: 0, max: 0 };
 }
 
@@ -2169,13 +2205,15 @@ function spawnBoss(forcedId) {
   addTelegraph({ kind: 'zone', x: p.x, y: p.y, r: def.r * 2.2, dur: BOSS_ENTRANCE_T, color: def.color });
   G.boss = e;
   G.bossNum++;
-  // C5: announce late-game weapon tech the moment its gate opens
+  // C5/C6: announce late-game tech (weapons + abilities) the moment its gate opens
   G.wUnlocked = G.wUnlocked || {};
-  for (const wid of WEAPON_IDS) {
-    const wdef = WEAPONS[wid];
-    if (wdef.unlock && !G.wUnlocked[wid] && wdef.unlock()) {
-      G.wUnlocked[wid] = true;
-      floater(player.x, player.y - 70, wdef.icon + ' ' + wdef.name.toUpperCase() + ' — TECH UNLOCKED', wdef.color, 15);
+  for (const [ids, reg] of [[WEAPON_IDS, WEAPONS], [PASSIVE_IDS, PASSIVES]]) {
+    for (const wid of ids) {
+      const wdef = reg[wid];
+      if (wdef.unlock && !G.wUnlocked[wid] && wdef.unlock()) {
+        G.wUnlocked[wid] = true;
+        floater(player.x, player.y - 70, wdef.icon + ' ' + wdef.name.toUpperCase() + ' — TECH UNLOCKED', wdef.color, 15);
+      }
     }
   }
   G.bossBanner = { name: e.name, sub: 'THE SWARM SCATTERS — DUEL BEGINS', life: BOSS_BANNER_T, max: BOSS_BANNER_T };
@@ -3474,6 +3512,9 @@ const DROP_BOMB_CHANCE   = 0.009;
 function killEnemy(e, reward) {
   if (e.dead) return;
   e.dead = true;
+  // C6 Adrenal Loop: kills shave the dash cooldown
+  if (reward && S().dashKillCd > 0 && player.dashCD > 0)
+    player.dashCD = Math.max(0, player.dashCD - S().dashKillCd);
   if (G.focusTarget === e) G.focusTarget = null;
   explodeAt(e.x, e.y, e.boss ? 200 : (e.elite ? 90 : 40), e.color);
   if (e.boss) {
@@ -3856,6 +3897,16 @@ function update(dt) {
   const speed = BASE_SPEED * S().moveSpeedMul;
   if (player.dashTime > 0) {
     player.dashTime -= dt;
+    // C6 Spore Wake: the dash sows a toxic trail
+    if (S().sporeLv > 0) {
+      player.sporeAcc = (player.sporeAcc || 0) - dt;
+      if (player.sporeAcc <= 0) {
+        player.sporeAcc = SPORE_DROP_EVERY;
+        if (G.spores.length >= SPORE_CAP) G.spores.shift();
+        const sl = SPORE_LIFE + S().sporeLv * 0.35;
+        G.spores.push({ x: player.x, y: player.y, t: sl, max: sl, tick: 0 });
+      }
+    }
     player.vx = player.dashDir.x * speed * DASH_SPEED_MUL;
     player.vy = player.dashDir.y * speed * DASH_SPEED_MUL;
     if (Math.random() < 0.8) spawnParticle(player.x, player.y, rand(-30, 30), rand(-30, 30), 0.25, 3, CY, 'spark');
@@ -3880,6 +3931,24 @@ function update(dt) {
   player.x += player.vx * dt; player.y += player.vy * dt;
   const lim = ARENA / 2 - player.r;
   player.x = clamp(player.x, -lim, lim); player.y = clamp(player.y, -lim, lim);
+  // C6 Spore Wake: the toxic trail ticks enemies that cross it
+  if (G.spores && G.spores.length) {
+    for (let i = G.spores.length - 1; i >= 0; i--) {
+      const sp = G.spores[i];
+      sp.t -= dt; sp.tick -= dt;
+      if (sp.t <= 0) { G.spores.splice(i, 1); continue; }
+      if (sp.tick <= 0) {
+        sp.tick = 0.2;
+        const sdm = SPORE_DPS * S().sporeLv * 0.2 * S().damageMul;
+        grid.query(sp.x, sp.y, SPORE_R, _wq);
+        for (let j = 0; j < _wq.length; j++) {
+          const e = _wq[j]; if (e.dead) continue;
+          if (dist2(sp.x, sp.y, e.x, e.y) < (SPORE_R + e.r) ** 2)
+            damageEnemy(e, sdm, { silent: true, color: GR });
+        }
+      }
+    }
+  }
   G.playerSlow = 1;                             // reset; disruptors re-apply during updateEnemies
   const spd = Math.hypot(player.vx, player.vy);
 
@@ -4060,6 +4129,13 @@ function render() {
   // pickups (gentle bob + pulsing glow)
   for (const p of G.pickups) { const c = PICKUP_COLOR[p.type] || WH; glow(p.x, p.y + Math.sin(p.t * 3) * 3, 16 + Math.sin(p.t * 6) * 3, c, 0.9); }
   // enemy projectiles
+  // C6 spore trail puddles (under projectiles)
+  if (G.spores) for (const sp of G.spores) {
+    const a = sp.t / sp.max;
+    glow(sp.x, sp.y, SPORE_R * (0.5 + 0.5 * a), GR, 0.30 * a + 0.08);
+    ctx.fillStyle = rgba(GR, 0.10 * a);
+    ctx.beginPath(); ctx.arc(sp.x, sp.y, SPORE_R * 0.8, 0, TAU); ctx.fill();
+  }
   for (const p of G.eProj) glow(p.x, p.y, p.r * 2.2, p.color, p.arm > 0 ? 0.3 : 0.9);
   // enemy glows (spawn-in: glow swells with the materializing body)
   for (const e of G.enemies) {
@@ -4547,7 +4623,7 @@ function startGame() {
     pendingLevels: 0, rerolls: 1, spawnTimer: 0, nextBossAt: FIRST_BOSS_AT, bossNum: 0, bossBag: [], bossBanner: null, bossTier: 0,
     dirIntensity: 1, dirStress: 0, dirKps: 0, dirDps: 0, spawnRamp: 1,
     glyphs: {}, glyphCount: 0, sigil: 0, ritual: null, sigilUI: null, lvUnlockAt: null,
-    dashZoom: 0, trail: [], focusTarget: null, dmgDir: null,
+    dashZoom: 0, trail: [], spores: [], focusTarget: null, dmgDir: null,
     inputHiccup: 0, glitchFX: 0, boss: null, frost: null, playerSlow: 1,
   });
   enemyId = 1;
