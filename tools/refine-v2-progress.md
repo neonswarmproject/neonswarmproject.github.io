@@ -79,7 +79,9 @@ for every tunable. Zero console errors desktop + mobile.
       formation; tri-beam edges, staggered led volleys, lance relay, phase-3
       overclock duty cycle; crown marks the damageable body; glyph #7 joins
       the sigil set automatically
-- [ ] B2 LEVIATHAN — segmented serpent, Architect-grade; unique relic
+- [x] B2 LEVIATHAN (v3.7): 14-seg constraint-chain serpent, head-only damage,
+      serpentine weave pursuit, coil+gate+constrict, dive eruption, phase-3
+      spine storm; glyph #8
 - [ ] B3 OBELISK — monolithic arena-control boss, Architect-grade; relic
 - [ ] B4 MIRROR — LEARNS from the player from spawn until the fight (weapons,
       movement, habits), fights as an improved copy with its own abilities;

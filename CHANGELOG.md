@@ -4,6 +4,23 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v3.7 — 2026-06-12 — LEVIATHAN (new roster boss)
+
+A 14-segment serpent. Only the **HEAD** (white maw, yellow eyes) takes
+damage — the body is a living hazard that follows on a constraint chain:
+
+- **Serpentine pursuit:** limited-turn steering + sinusoidal weave; it sweeps
+  in arcs instead of beelining.
+- **COIL:** it encircles your position spiraling inward, leaving ONE white
+  gate in the ring — get through it before the **CONSTRICT** snaps the whole
+  body inward and crushes whatever's left inside.
+- **DIVE (phase 2+):** submerges (untouchable), a shadow tracks under you,
+  then it ERUPTS at your last position — the body bursts out of the breach.
+- **SPINE STORM (phase 3):** every other segment sheds armed spines
+  perpendicular to the body's curve — a barrage shaped like the serpent.
+- Spit volleys lead your velocity between specials. Drops a Speed Surge.
+- Glyph #8 joins the sigil ritual.
+
 ## v3.6 — 2026-06-12 — SENTINEL TRINITY (new roster boss)
 
 Three bodies, one will — the first of the five new roster bosses, built to

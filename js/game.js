@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '3.6';
+const VERSION = '3.7';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -2225,7 +2225,7 @@ function director(dt) {
    suppresses normal spawns and sweeps the arena on arrival; when the bag
    refills, bossTier++ and bosses return stronger.
    ========================================================================= */
-const BOSS_IDS = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden', 'trinity'];
+const BOSS_IDS = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden', 'trinity', 'leviathan'];
 // v2 boss-rush: a shuffled bag picks the next boss — no repeats within a cycle
 // and OVERLORD has no guaranteed intro slot. Scaling comes from ELAPSED TIME +
 // completed cycles (tier), never a per-boss difficulty rank, so a "hard" boss
@@ -2458,6 +2458,18 @@ const TRI_BEAM_CD = 5.2, TRI_BEAM_TELE = 0.85, TRI_BEAM_DUR = 2.2, TRI_BEAM_W = 
 const TRI_VOLLEY_CD = 2.6, TRI_VOLLEY_STAGGER = 0.4, TRI_BSPD = 210;
 const TRI_LUNGE_CD = 6.5, TRI_LUNGE_TELE = 0.55, TRI_LUNGE_T = 0.42, TRI_LUNGE_OVER = 240;
 const TRI_BLINK_ON = 2.6, TRI_BLINK_OFF = 0.9;    // OVERCLOCK edge duty cycle
+// B2 (v3.7) LEVIATHAN — segmented serpent. Only the HEAD takes damage; the
+// body is a living hazard that coils, dives and sheds spines.
+const LEV_SEG_N = 14, LEV_SEG_SPACING = 26, LEV_SEG_R = 16;
+const LEV_TURN = 2.6;                              // rad/s steering limit (sweeping arcs)
+const LEV_WEAVE_F = 3.1, LEV_WEAVE_A = 0.55;       // serpentine weave
+const LEV_SPIT_CD = 2.8, LEV_SPIT_SPD = 230;
+const LEV_COIL_CD = 9, LEV_COIL_T = 3.2;           // encircle-the-player attack
+const LEV_COIL_R0 = 280, LEV_COIL_R1 = 150, LEV_COIL_SPIN = 3.4;
+const LEV_GATE_ARC = 0.55;                         // rad half-width of the white escape gate
+const LEV_CONSTRICT_T = 0.5, LEV_CONSTRICT_R = 150;
+const LEV_DIVE_CD = 8, LEV_DIVE_TRACK = 1.6, LEV_DIVE_ERUPT_R = 170;
+const LEV_SPINE_CD = 4.2, LEV_SPINE_SPD = 240;     // phase 3: body sheds spines
 
 /* ---- THE ARCHITECT (Section D): voluntary super-boss. Fixed, brutal stats —
    deliberately NOT touched by the adaptive director or build scaling. ---- */
@@ -3117,6 +3129,212 @@ const BOSSES = {
         if (prime) {   // the crown marks the only damageable body
           ctx.strokeStyle = rgba(YE, 0.85); ctx.lineWidth = 2;
           poly(A.x, A.y - rr - 12, 6, 3, Math.PI); ctx.stroke();
+        }
+      }
+    },
+  },
+
+  /* ---- SLOT 7 (B2, v3.7): LEVIATHAN — the segmented serpent ---- */
+  leviathan: {
+    id: 'leviathan', name: 'LEVIATHAN', color: '#3ef0c8', r: 34, speed: 95, hpMul: 1.35,
+    drop: 'surge', phaseThresholds: [0.66, 0.33],
+    update(e, dt) {
+      const d = e.data, C = '#3ef0c8';
+      if (!d.init) {
+        d.init = true;
+        d.h = rand(0, TAU);
+        d.segs = [];
+        for (let i = 0; i < LEV_SEG_N; i++) d.segs.push({ x: e.x - Math.cos(d.h) * LEV_SEG_SPACING * (i + 1), y: e.y - Math.sin(d.h) * LEV_SEG_SPACING * (i + 1) });
+        d.spitT = LEV_SPIT_CD; d.coilCD = LEV_COIL_CD * 0.7; d.diveCD = LEV_DIVE_CD; d.spineT = LEV_SPINE_CD;
+        d.mode = 'chase';
+      }
+      const spd = e.speed * (1 + e.phase * 0.18);
+      const lim = ARENA / 2 - 60;
+      const wrapA = a => { while (a > Math.PI) a -= TAU; while (a < -Math.PI) a += TAU; return a; };
+
+      if (d.mode === 'chase') {
+        // serpentine pursuit: limited turn rate + sinusoidal weave
+        const want = angTo(e.x, e.y, player.x, player.y);
+        d.h += clamp(wrapA(want - d.h), -LEV_TURN * dt, LEV_TURN * dt);
+        const mh = d.h + Math.sin(G.time * LEV_WEAVE_F) * LEV_WEAVE_A;
+        e.x = clamp(e.x + Math.cos(mh) * spd * dt, -lim, lim);
+        e.y = clamp(e.y + Math.sin(mh) * spd * dt, -lim, lim);
+        e.vx = e.vy = 0;
+        // COIL: encircle the player, leave one white gate, then constrict
+        d.coilCD -= dt;
+        if (d.coilCD <= 0) {
+          d.mode = 'coil'; d.coilT = 0;
+          d.cx = player.x; d.cy = player.y;
+          d.coilA = angTo(d.cx, d.cy, e.x, e.y);
+          d.gateA = d.coilA + Math.PI;
+          addTelegraph({ kind: 'zone', x: d.cx, y: d.cy, r: LEV_COIL_R1, dur: LEV_COIL_T, color: C });
+          G.bossBanner = { name: 'IT COILS', sub: 'FIND THE WHITE GATE', life: 1.6, max: 1.6 };
+          sfx('boss');
+        }
+        // DIVE (phase 2+): submerge, shadow-track, erupt
+        if (e.phase >= 1) {
+          d.diveCD -= dt;
+          if (d.diveCD <= 0 && d.mode === 'chase') {
+            d.mode = 'dive'; d.diveT = LEV_DIVE_TRACK;
+            e.intangible = LEV_DIVE_TRACK + 0.3;
+            sfx('dash');
+            for (let i = 0; i < 16; i++) spawnParticle(e.x, e.y, rand(-160, 160), rand(-160, 160), 0.4, 3, C, 'spark');
+          }
+        }
+      } else if (d.mode === 'coil') {
+        d.coilT += dt;
+        const f = clamp(d.coilT / LEV_COIL_T, 0, 1);
+        const r = lerp(LEV_COIL_R0, LEV_COIL_R1, f);
+        d.coilA += LEV_COIL_SPIN * dt;
+        e.x = d.cx + Math.cos(d.coilA) * r;
+        e.y = d.cy + Math.sin(d.coilA) * r;
+        e.vx = e.vy = 0;
+        d.h = d.coilA + Math.PI / 2;
+        if (d.coilT >= LEV_COIL_T) {
+          // CONSTRICT: the ring snaps inward — caught inside = crushed
+          d.mode = 'constrict'; d.conT = LEV_CONSTRICT_T;
+          sfx('bigExplode'); G.shake = Math.min(1, G.shake + 0.5);
+        }
+      } else if (d.mode === 'constrict') {
+        d.conT -= dt;
+        for (const s of d.segs) {
+          const a = angTo(s.x, s.y, d.cx, d.cy);
+          s.x += Math.cos(a) * 520 * dt; s.y += Math.sin(a) * 520 * dt;
+        }
+        const ha = angTo(e.x, e.y, d.cx, d.cy);
+        e.x += Math.cos(ha) * 520 * dt; e.y += Math.sin(ha) * 520 * dt;
+        if (d.conT <= 0) {
+          if (dist(player.x, player.y, d.cx, d.cy) < LEV_CONSTRICT_R) hurtPlayer(e.dmg * B_NOVA, d.cx, d.cy);
+          spawnRing(d.cx, d.cy, 26, LEV_CONSTRICT_R + 60, 0.45, C);
+          d.mode = 'chase'; d.coilCD = LEV_COIL_CD;
+        }
+      } else if (d.mode === 'dive') {
+        // submerged: a shadow telegraph tracks the player
+        d.diveT -= dt;
+        d.ex = player.x; d.ey = player.y;
+        if (Math.random() < 0.5) addTelegraph({ kind: 'zone', x: player.x, y: player.y, r: 50, dur: 0.2, color: C });
+        if (d.diveT <= 0) {
+          // ERUPTION
+          e.x = d.ex; e.y = d.ey; e.intangible = 0;
+          explodeAt(e.x, e.y, LEV_DIVE_ERUPT_R, C);
+          if (dist(player.x, player.y, e.x, e.y) < LEV_DIVE_ERUPT_R + player.r) hurtPlayer(e.dmg * B_NOVA, e.x, e.y);
+          bossRing(e, 14, 220, B_BULLET, rand(0, TAU), C);
+          // the body bursts out of the breach behind the head
+          for (let i = 0; i < d.segs.length; i++) {
+            const a = rand(0, TAU);
+            d.segs[i].x = e.x + Math.cos(a) * (i + 1) * LEV_SEG_SPACING * 0.4;
+            d.segs[i].y = e.y + Math.sin(a) * (i + 1) * LEV_SEG_SPACING * 0.4;
+          }
+          G.shake = 1; G.hitstop = Math.max(G.hitstop, 0.08);
+          sfx('bigExplode');
+          d.mode = 'chase'; d.diveCD = LEV_DIVE_CD;
+        }
+      }
+
+      // body: constraint chain follows the head
+      let prev = e;
+      for (const s of d.segs) {
+        const dd = dist(s.x, s.y, prev.x, prev.y);
+        if (dd > LEV_SEG_SPACING) {
+          const a = angTo(s.x, s.y, prev.x, prev.y);
+          const pull = dd - LEV_SEG_SPACING;
+          s.x += Math.cos(a) * pull; s.y += Math.sin(a) * pull;
+        } else if (dd < LEV_SEG_SPACING * 0.8 && dd > 0.001) {
+          // min separation: tight turns must not bunch the body into a knot
+          const a = angTo(s.x, s.y, prev.x, prev.y);
+          const push = (LEV_SEG_SPACING * 0.8 - dd) * 0.6;
+          s.x -= Math.cos(a) * push; s.y -= Math.sin(a) * push;
+        }
+        prev = s;
+      }
+      // segment contact damage (gate segments are safe while coiling)
+      if (d.mode !== 'dive') {
+        for (let i = 0; i < d.segs.length; i++) {
+          const s = d.segs[i];
+          if (d.mode === 'coil' && Math.abs(wrapA(angTo(d.cx, d.cy, s.x, s.y) - d.gateA)) < LEV_GATE_ARC) continue;
+          if (dist2(s.x, s.y, player.x, player.y) < (LEV_SEG_R + player.r) ** 2) {
+            hurtPlayer(e.dmg * 0.5, s.x, s.y);
+            break;
+          }
+        }
+      }
+      // spit volleys from the maw while chasing
+      if (d.mode === 'chase') {
+        d.spitT -= dt;
+        if (d.spitT <= 0) {
+          d.spitT = LEV_SPIT_CD * (e.phase >= 2 ? 0.75 : 1);
+          const base = angTo(e.x, e.y, player.x + player.vx * 0.35, player.y + player.vy * 0.35);
+          for (let k = -1; k <= 1; k++) {
+            const a = base + k * 0.2;
+            spawnEnemyProjectile(e.x + Math.cos(d.h) * e.r, e.y + Math.sin(d.h) * e.r, Math.cos(a) * LEV_SPIT_SPD, Math.sin(a) * LEV_SPIT_SPD, e.dmg * B_BULLET, C, { r: 7 });
+          }
+          e.flash = 0.6;
+        }
+      }
+      // SPINE STORM (phase 3): the whole body sheds spines outward
+      if (e.phase >= 2 && d.mode === 'chase') {
+        d.spineT -= dt;
+        if (d.spineT <= 0) {
+          d.spineT = LEV_SPINE_CD;
+          for (let i = 1; i < d.segs.length; i += 2) {
+            const s = d.segs[i], p2 = d.segs[i - 1];
+            const along = angTo(p2.x, p2.y, s.x, s.y);
+            for (const side of [-1, 1]) {
+              const a = along + side * Math.PI / 2;
+              spawnEnemyProjectile(s.x, s.y, Math.cos(a) * LEV_SPINE_SPD, Math.sin(a) * LEV_SPINE_SPD, e.dmg * B_BULLET, YE, { r: 5, arm: 0.3 });
+            }
+          }
+          e.flash = 1; sfx('zap');
+        }
+      }
+    },
+    onPhase(e, ph) {
+      floater(e.x, e.y - e.r - 40, ['', 'IT HUNGERS', 'SPINE STORM'][Math.min(ph, 2)], '#3ef0c8', 24);
+      bossRing(e, 18 + ph * 8, 190, B_BULLET, rand(0, TAU), '#3ef0c8');
+    },
+    draw(e) {
+      const d = e.data; if (!d || !d.segs) return;
+      const C = '#3ef0c8', diving = d.mode === 'dive';
+      const bodyA = diving ? 0.16 : 1;
+      const wrapA = a => { while (a > Math.PI) a -= TAU; while (a < -Math.PI) a += TAU; return a; };
+      // body — tapered plates, dorsal fins, gate glows white during a coil
+      for (let i = d.segs.length - 1; i >= 0; i--) {
+        const s = d.segs[i];
+        const rr = LEV_SEG_R * (1 - i / d.segs.length * 0.55);
+        const gate = d.mode === 'coil' && Math.abs(wrapA(angTo(d.cx, d.cy, s.x, s.y) - d.gateA)) < LEV_GATE_ARC;
+        const col = gate ? WH : C;
+        glow(s.x, s.y, rr * 1.3, col, (gate ? 0.9 : 0.4) * bodyA);
+        ctx.fillStyle = rgba(col, (gate ? 0.30 : 0.12) * bodyA);
+        ctx.strokeStyle = rgba(gate ? WH : C, (gate ? 1 : 0.7) * bodyA);
+        ctx.lineWidth = gate ? 3 : 2;
+        const next = i === 0 ? e : d.segs[i - 1];
+        const a = angTo(s.x, s.y, next.x, next.y);
+        poly(s.x, s.y, rr, 4, a + Math.PI / 4); ctx.fill(); ctx.stroke();
+        if (i % 3 === 1 && !diving) {   // dorsal fin
+          ctx.strokeStyle = rgba(C, 0.5 * bodyA); ctx.lineWidth = 1.5;
+          const fa = a + Math.PI / 2;
+          ctx.beginPath(); ctx.moveTo(s.x, s.y);
+          ctx.lineTo(s.x + Math.cos(fa) * rr * 1.7, s.y + Math.sin(fa) * rr * 1.7); ctx.stroke();
+        }
+      }
+      // head — maw wedge + twin eyes (the ONLY damageable part)
+      if (!diving) {
+        glow(e.x, e.y, e.r * 1.5, C, 0.6);
+        ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(d.h || 0);
+        ctx.fillStyle = rgba(C, 0.16); ctx.strokeStyle = rgba(WH, 0.95); ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        ctx.moveTo(e.r * 1.2, 0); ctx.lineTo(e.r * 0.1, e.r * 0.85);
+        ctx.lineTo(-e.r * 0.7, e.r * 0.5); ctx.lineTo(-e.r * 0.7, -e.r * 0.5);
+        ctx.lineTo(e.r * 0.1, -e.r * 0.85); ctx.closePath(); ctx.fill(); ctx.stroke();
+        // jaw slit
+        ctx.strokeStyle = rgba(C, 0.9); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(e.r * 1.05, 0); ctx.lineTo(e.r * 0.2, 0); ctx.stroke();
+        ctx.restore();
+        const ea = (d.h || 0);
+        for (const side of [-1, 1]) {
+          const ex2 = e.x + Math.cos(ea + side * 0.55) * e.r * 0.55;
+          const ey2 = e.y + Math.sin(ea + side * 0.55) * e.r * 0.55;
+          glow(ex2, ey2, 5 + Math.sin(G.time * 6) * 1.5, YE, 0.95);
         }
       }
     },
