@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '3.9';
+const VERSION = '4.0';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -2236,7 +2236,7 @@ function director(dt) {
    suppresses normal spawns and sweeps the arena on arrival; when the bag
    refills, bossTier++ and bosses return stronger.
    ========================================================================= */
-const BOSS_IDS = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden', 'trinity', 'leviathan', 'obelisk', 'mirror'];
+const BOSS_IDS = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden', 'trinity', 'leviathan', 'obelisk', 'mirror', 'nexus'];
 // v2 boss-rush: a shuffled bag picks the next boss — no repeats within a cycle
 // and OVERLORD has no guaranteed intro slot. Scaling comes from ELAPSED TIME +
 // completed cycles (tier), never a per-boss difficulty rank, so a "hard" boss
@@ -2503,6 +2503,15 @@ const MIR_SEEK_CD = 3.0, MIR_SEEK_N = 3;
 const MIR_SHARD_CD = 5.5, MIR_SHARD_N = 8, MIR_SHARD_SPD = 240;
 const MIR_BLINK_CD = 4.5, MIR_REPULSE_CD = 5, MIR_INT_CD = 4.5, MIR_INT_TELE = 0.6, MIR_INT_R = 110;
 const MIR_KITE_D = 420, MIR_HUG_D = 200;                 // habit thresholds (avg duel distance)
+// B5 (v4.0) NEXUS — the portal network. It barely fights you itself; its
+// web does: indirect fire from portal exits, burning link-cycles, warp snares.
+const NEX_PORT_N = 4, NEX_PORT_N2 = 5, NEX_PORT_R = 26;
+const NEX_FIRE_CD = 2.4, NEX_FIRE_SPD = 230, NEX_FIRE_DELAY = 0.5;
+const NEX_REWEAVE_CD = 9, NEX_REWEAVE_TELE = 0.8;
+const NEX_SURGE_CD = 8, NEX_SURGE_TELE = 1.0, NEX_SURGE_DUR = 2.4, NEX_SURGE_W = 14;
+const NEX_SNARE_CD = 7, NEX_SNARE_TELE = 0.8, NEX_SNARE_R = 120;
+const NEX_KEEPAWAY = 380, NEX_FLEE_SPD = 90;
+const NEX_SPOKE_LEN = 150, NEX_SPOKE_W = 10, NEX_SPOKE_SPIN = 0.8;
 
 /* ---- THE ARCHITECT (Section D): voluntary super-boss. Fixed, brutal stats —
    deliberately NOT touched by the adaptive director or build scaling. ---- */
@@ -3776,6 +3785,172 @@ const BOSSES = {
       // the second reflection (phase 3): always on your OTHER side
       if (e.phase >= 2 && d.ex2 !== undefined)
         drawHull(d.ex2, d.ey2, angTo(d.ex2, d.ey2, player.x, player.y), 2.3, PU, 0.4);
+    },
+  },
+
+  /* ---- SLOT 10 (B5, v4.0): NEXUS — the portal network ---- */
+  nexus: {
+    id: 'nexus', name: 'NEXUS', color: CY, r: 36, speed: 30, hpMul: 1.35,
+    drop: 'magnet', phaseThresholds: [0.66, 0.33],
+    update(e, dt) {
+      const d = e.data;
+      const placePorts = (n) => {
+        d.ports = [];
+        const lim = ARENA / 2 - 80;
+        for (let k = 0; k < n; k++) {
+          const a = k / n * TAU + rand(-0.4, 0.4), rr = rand(280, 520);
+          d.ports.push({ x: clamp(player.x + Math.cos(a) * rr, -lim, lim), y: clamp(player.y + Math.sin(a) * rr, -lim, lim), spin: rand(0, TAU) });
+        }
+      };
+      if (!d.init) {
+        d.init = true;
+        d.fireT = 1.5; d.reweaveT = NEX_REWEAVE_CD; d.surgeT = NEX_SURGE_CD * 0.7;
+        d.snareT = NEX_SNARE_CD; d.relay = []; d.surge = null; d.snare = null; d.spokeA = 0;
+        placePorts(NEX_PORT_N);
+      }
+      // the node keeps its distance; the web fights for it
+      if (dist(e.x, e.y, player.x, player.y) < NEX_KEEPAWAY) {
+        const a = angTo(player.x, player.y, e.x, e.y), lim = ARENA / 2 - e.r;
+        e.x = clamp(e.x + Math.cos(a) * NEX_FLEE_SPD * dt, -lim, lim);
+        e.y = clamp(e.y + Math.sin(a) * NEX_FLEE_SPD * dt, -lim, lim);
+      }
+      e.vx = e.vy = 0;
+      // RELAY FIRE: ingest at the port near the node, erupt from the exit(s)
+      // nearest the player — watch the exits, not the boss
+      d.fireT -= dt;
+      if (d.fireT <= 0 && d.ports.length) {
+        d.fireT = NEX_FIRE_CD * (e.phase >= 1 ? 0.8 : 1);
+        let inP = d.ports[0], bd2 = Infinity;
+        for (const p of d.ports) { const dd = dist2(p.x, p.y, e.x, e.y); if (dd < bd2) { bd2 = dd; inP = p; } }
+        const outs = d.ports.slice().sort((A, B) => dist2(A.x, A.y, player.x, player.y) - dist2(B.x, B.y, player.x, player.y));
+        const exits = outs.slice(0, e.phase >= 2 ? 2 : 1);
+        G.beams.push({ x1: e.x, y1: e.y, x2: inP.x, y2: inP.y, w: 6, life: 0.12, max: 0.12, color: CY });
+        d.relay.push({ t: NEX_FIRE_DELAY, exits: exits.map(p => ({ x: p.x, y: p.y })) });
+        sfx('shoot');
+      }
+      for (let i = d.relay.length - 1; i >= 0; i--) {
+        const r = d.relay[i]; r.t -= dt;
+        if (r.t > 0) continue;
+        d.relay.splice(i, 1);
+        for (const p of r.exits) {
+          const base = angTo(p.x, p.y, player.x + player.vx * 0.3, player.y + player.vy * 0.3);
+          for (let k = -1; k <= 1; k++) {
+            const a = base + k * 0.18;
+            spawnEnemyProjectile(p.x, p.y, Math.cos(a) * NEX_FIRE_SPD, Math.sin(a) * NEX_FIRE_SPD, e.dmg * B_BULLET, CY, { r: 6, arm: 0.22 });
+          }
+          spawnRing(p.x, p.y, 8, NEX_PORT_R + 16, 0.3, CY);
+        }
+        sfx('zap');
+      }
+      // REWEAVE: the whole web relocates around you
+      d.reweaveT -= dt;
+      if (d.reweaveT <= 0) {
+        d.reweaveT = NEX_REWEAVE_CD;
+        placePorts(e.phase >= 1 ? NEX_PORT_N2 : NEX_PORT_N);
+        for (const p of d.ports) addTelegraph({ kind: 'zone', x: p.x, y: p.y, r: NEX_PORT_R + 10, dur: NEX_REWEAVE_TELE, color: PU });
+        floater(e.x, e.y - e.r - 26, 'REWEAVE', CY, 16);
+      }
+      // NETWORK SURGE (phase 2+): the cycle of links burns
+      if (e.phase >= 1) {
+        if (!d.surge) {
+          d.surgeT -= dt;
+          if (d.surgeT <= 0 && d.ports.length >= 3) {
+            d.surge = { t: NEX_SURGE_TELE, on: false, dur: NEX_SURGE_DUR };
+            for (let k = 0; k < d.ports.length; k++) {
+              const A = d.ports[k], B = d.ports[(k + 1) % d.ports.length];
+              addTelegraph({ kind: 'line', x: A.x, y: A.y, a: angTo(A.x, A.y, B.x, B.y), len: dist(A.x, A.y, B.x, B.y), w: 8, dur: NEX_SURGE_TELE, color: CY });
+            }
+            sfx('boss');
+          }
+        } else if (!d.surge.on) {
+          d.surge.t -= dt;
+          if (d.surge.t <= 0) d.surge.on = true;
+        } else {
+          d.surge.dur -= dt;
+          for (let k = 0; k < d.ports.length; k++) {
+            const A = d.ports[k], B = d.ports[(k + 1) % d.ports.length];
+            G.beams.push({ x1: A.x, y1: A.y, x2: B.x, y2: B.y, w: NEX_SURGE_W, life: 0.05, max: 0.05, color: CY });
+            if (segDist(A.x, A.y, B.x, B.y, player.x, player.y) < NEX_SURGE_W / 2 + player.r)
+              hurtPlayer(e.dmg * B_BEAM, (A.x + B.x) / 2, (A.y + B.y) / 2);
+          }
+          if (d.surge.dur <= 0) { d.surge = null; d.surgeT = NEX_SURGE_CD; }
+        }
+        // WARP SNARE: caught in the ring -> teleported through the web
+        d.snareT -= dt;
+        if (d.snareT <= 0 && !d.snare) {
+          d.snareT = NEX_SNARE_CD;
+          d.snare = { x: player.x, y: player.y, t: NEX_SNARE_TELE };
+          addTelegraph({ kind: 'zone', x: player.x, y: player.y, r: NEX_SNARE_R, dur: NEX_SNARE_TELE, color: PU });
+        }
+        if (d.snare) {
+          d.snare.t -= dt;
+          if (d.snare.t <= 0) {
+            spawnRing(d.snare.x, d.snare.y, 14, NEX_SNARE_R, 0.4, PU);
+            if (dist(player.x, player.y, d.snare.x, d.snare.y) < NEX_SNARE_R && d.ports.length) {
+              const p = pick(d.ports);
+              const lim = ARENA / 2 - player.r;
+              player.x = clamp(p.x, -lim, lim); player.y = clamp(p.y, -lim, lim);
+              player.vx = player.vy = 0;
+              G.glitchFX = Math.max(G.glitchFX || 0, 0.5);
+              hurtPlayer(e.dmg * 0.5, p.x, p.y);
+              floater(player.x, player.y - 30, 'WARPED', PU, 16);
+              sfx('hurt');
+            }
+            d.snare = null;
+          }
+        }
+      }
+      // OVERLINK (phase 3): every portal grows a rotating spoke beam
+      if (e.phase >= 2) {
+        d.spokeA += NEX_SPOKE_SPIN * dt;
+        for (const p of d.ports) {
+          const a = d.spokeA + p.spin;
+          const x2 = p.x + Math.cos(a) * NEX_SPOKE_LEN, y2 = p.y + Math.sin(a) * NEX_SPOKE_LEN;
+          G.beams.push({ x1: p.x, y1: p.y, x2, y2, w: NEX_SPOKE_W, life: 0.05, max: 0.05, color: PU });
+          if (segDist(p.x, p.y, x2, y2, player.x, player.y) < NEX_SPOKE_W / 2 + player.r)
+            hurtPlayer(e.dmg * 0.6, p.x, p.y);
+        }
+      }
+    },
+    onPhase(e, ph) {
+      const d = e.data;
+      if (d) d.reweaveT = 0.01;   // every wound re-weaves the web
+      floater(e.x, e.y - e.r - 40, ['', 'THE WEB WIDENS', 'OVERLINK'][Math.min(ph, 2)], CY, 24);
+      bossRing(e, 18 + ph * 8, 200, B_BULLET, rand(0, TAU), CY);
+    },
+    draw(e) {
+      const d = e.data; if (!d) return;
+      const t = G.time;
+      // faint web between cycle neighbors
+      if (d.ports && d.ports.length >= 2) {
+        ctx.strokeStyle = rgba(CY, 0.12); ctx.lineWidth = 1;
+        for (let k = 0; k < d.ports.length; k++) {
+          const A = d.ports[k], B = d.ports[(k + 1) % d.ports.length];
+          ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.stroke();
+        }
+      }
+      // portals: counter-rotating lens rings
+      if (d.ports) for (const p of d.ports) {
+        glow(p.x, p.y, NEX_PORT_R * 1.3, CY, 0.55);
+        ctx.strokeStyle = rgba(CY, 0.9); ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(p.x, p.y, NEX_PORT_R, t * 2 + p.spin, t * 2 + p.spin + Math.PI * 1.4); ctx.stroke();
+        ctx.strokeStyle = rgba(PU, 0.8); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(p.x, p.y, NEX_PORT_R * 0.62, -t * 3 - p.spin, -t * 3 - p.spin + Math.PI * 1.2); ctx.stroke();
+        glow(p.x, p.y, 6 + Math.sin(t * 5 + p.spin) * 2, WH, 0.7);
+      }
+      // the node: octagonal circuit hub
+      glow(e.x, e.y, e.r * 1.5, CY, 0.6);
+      ctx.fillStyle = rgba(CY, 0.10); ctx.strokeStyle = rgba(WH, 0.95); ctx.lineWidth = 3.5;
+      poly(e.x, e.y, e.r, 8, t * 0.4); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = rgba(CY, 0.75); ctx.lineWidth = 1.5;
+      for (let k = 0; k < 4; k++) {
+        const a1 = t * 0.9 + k / 4 * TAU, a2 = a1 + Math.PI * 0.75;
+        ctx.beginPath();
+        ctx.moveTo(e.x + Math.cos(a1) * e.r * 0.8, e.y + Math.sin(a1) * e.r * 0.8);
+        ctx.lineTo(e.x + Math.cos(a2) * e.r * 0.8, e.y + Math.sin(a2) * e.r * 0.8);
+        ctx.stroke();
+      }
+      glow(e.x, e.y, e.r * 0.3 + Math.sin(t * 4) * 3, PU, 0.95);
     },
   },
 

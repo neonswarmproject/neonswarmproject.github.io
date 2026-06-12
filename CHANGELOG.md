@@ -4,6 +4,23 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v4.0 — 2026-06-12 — NEXUS (new roster boss; the roster is complete)
+
+The portal network. The node barely fights you — its web does:
+
+- **Relay fire:** it ingests orbs at the portal near itself and they erupt as
+  led fans from the exit nearest YOU (two exits in phase 3). Watch the exits,
+  not the boss.
+- **Reweave:** the whole web relocates around you every 9s — and instantly on
+  every phase wound.
+- **NETWORK SURGE (phase 2+):** the portal cycle telegraphs, then its links
+  BURN for 2.4s, carving the arena into cells.
+- **WARP SNARE (phase 2+):** a ring closes on your position — caught inside,
+  you're teleported through a random portal with a glitch jolt.
+- **OVERLINK (phase 3):** every portal grows a rotating spoke beam.
+- The node keeps its distance and drifts away if you approach. Drops a
+  Magnet. Glyph #11 — the ritual now spans all eleven roster bosses.
+
 ## v3.9 — 2026-06-12 — MIRROR (new roster boss)
 
 It has been watching since the run began.

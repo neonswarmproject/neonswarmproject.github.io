@@ -91,7 +91,10 @@ for every tunable. Zero console errors desktop + mobile.
       version of your weapon family); shard veil; 12s adaptation loop with
       kite/hug/dash counters + 15% speedup each; phase-3 second reflection;
       glyph #10
-- [ ] B5 NEXUS — portal/network boss, Architect-grade; relic
+- [x] B5 NEXUS (v4.0): portal web — relay fire from player-nearest exits,
+      reweave on timer + on phase wounds, burning link cycle, warp snares
+      (teleport + glitch jolt), phase-3 portal spokes; keep-away node;
+      glyph #11
 - [ ] B6 Full relic set → summon THE ARCHITECT at will (extend the existing
       glyph/sigil ritual to the grown roster)
 - [ ] B7 THE ARCHITECT absorbs EVERY roster boss's mechanics (fold in each
