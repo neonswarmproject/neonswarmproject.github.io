@@ -4,6 +4,17 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v3.0 — 2026-06-12 — Phoenix Protocol (the maxable extra life)
+
+- **🔥 Phoenix Protocol** (LATE TECH ability, 4 ranks): charge it to MAX and
+  it ARMS — a pulsing "PHOENIX ARMED" indicator sits above your HP bar. The
+  next death is refused: you rise at 60% HP with 2.5s of invulnerability, the
+  rebirth wave erases every enemy bullet on screen and slams everything
+  within 380px for 150 + heavy knockback.
+- Using it burns the protocol back to **rank 0** — the cards offer it again
+  and the whole ladder must be refilled to re-arm. One arming at a time,
+  refills available all run.
+
 ## v2.9 — 2026-06-12 — Five late-game abilities
 
 The "super-dash" idea is split in two, plus three more — all unlock-gated

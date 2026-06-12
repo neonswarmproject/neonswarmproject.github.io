@@ -54,9 +54,9 @@ for every tunable. Zero console errors desktop + mobile.
       + cd), Spore Wake (toxic dash trail), Backlash Core (hit-retaliation
       nova), Adrenal Loop (kills refund dash cd), Ghost Protocol (+i-frame
       time). Same unlock-gate + announcement system as C5.
-- [ ] C7 Maxable extra-life ability: at max rank grants ONE extra life for the
-      rest of the run; if that life is consumed the ability resets to rank 0
-      and must be refilled
+- [x] C7 Phoenix Protocol (v3.0): 4-rank LATE TECH ability; at max it arms an
+      extra life (HUD indicator); death → rise at 60% HP, 2.5s i-frames,
+      bullet-erase + 380px nova; rank resets to 0 on use and must be refilled
 - [ ] C8 Enemy drops (8s duration each): +move speed / longer dash / +30%
       i-frame time on hit
 

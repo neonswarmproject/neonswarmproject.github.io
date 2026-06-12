@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '2.9';
+const VERSION = '3.0';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -105,6 +105,9 @@ const DASH_TRAIL_LIFE = 0.22;  // s each afterimage ghost lives
 const SPORE_DROP_EVERY = 0.03; // s between spore drops while dashing
 const SPORE_LIFE = 1.4, SPORE_R = 34, SPORE_DPS = 22, SPORE_CAP = 40;
 const BACKLASH_R = 170, BACKLASH_DMG = 38;
+// C7 (v3.0) Phoenix Protocol: max the ability -> one extra life; using it
+// burns the ability back to rank 0.
+const PHX_REVIVE_HP = 0.6, PHX_INVULN = 2.5, PHX_NOVA_R = 380, PHX_NOVA_DMG = 150;
 const CAM_LERP = 0.12;         // smooth camera follow (never snaps)
 
 /* ===========================================================================
@@ -545,8 +548,9 @@ function freshStats() {
     damageMul: 1, attackSpeedMul: 1, areaMul: 1, projSpeedMul: 1, projDurMul: 1,
     moveSpeedMul: 1, maxHpBonus: 0, regen: 0, armor: 0,
     crit: 0.03, critMult: 2, xpGain: 1, pickup: 95, luck: 0,
-    // C6 late-game ability stats
+    // C6/C7 late-game ability stats
     dashRangeMul: 1, dashCdMul: 1, sporeLv: 0, backlashLv: 0, dashKillCd: 0, invulnMul: 1,
+    phoenixLv: 0,
   };
 }
 
@@ -592,7 +596,30 @@ function hurtPlayer(dmg, srcX, srcY) {
     }
     G.particles.push({ x: player.x, y: player.y, vx: 0, vy: 0, r: 12, mr: br, life: 0.4, max: 0.4, color: RD, kind: 'ring' });
   }
-  if (player.hp <= 0) { player.hp = 0; gameOver(); }
+  if (player.hp <= 0) {
+    // C7 Phoenix Protocol: a maxed protocol burns itself to refuse death
+    if (player.phoenixReady) {
+      player.phoenixReady = false;
+      player.passives.phoenix = 0;          // rank resets — refill to arm again
+      S().phoenixLv = 0;
+      player.hp = Math.round(player.maxHp * PHX_REVIVE_HP);
+      player.invuln = PHX_INVULN;
+      G.eProj.length = 0;                   // the rebirth wave erases every bullet
+      grid.query(player.x, player.y, PHX_NOVA_R, _wq);
+      for (let i = 0; i < _wq.length; i++) {
+        const e = _wq[i]; if (e.dead) continue;
+        if (dist2(player.x, player.y, e.x, e.y) < (PHX_NOVA_R + e.r) ** 2)
+          damageEnemy(e, PHX_NOVA_DMG, { kbx: e.x - player.x, kby: e.y - player.y, kb: 420, color: OR });
+      }
+      for (let k = 0; k < 3; k++)
+        G.particles.push({ x: player.x, y: player.y, vx: 0, vy: 0, r: 16, mr: 240 + k * 180, life: 0.55 + k * 0.1, max: 0.55 + k * 0.1, color: [WH, OR, YE][k], kind: 'ring' });
+      G.hitstop = Math.max(G.hitstop, 0.18); G.flash = 0.8; G.flashColor = OR; G.shake = 1;
+      floater(player.x, player.y - 60, '🔥 PHOENIX PROTOCOL — RISE', OR, 22);
+      sfx('bigExplode');
+      return;
+    }
+    player.hp = 0; gameOver();
+  }
 }
 
 /* ===========================================================================
@@ -1731,6 +1758,16 @@ const PASSIVES = {
   ghost:    { name: 'Ghost Protocol', icon: '👻', color: PU, max: 3, unlock: () => G.bossNum >= 4 || G.time >= 540,
     desc: '+25% invulnerability time from dashes &amp; hits.',
     apply() { S().invulnMul *= 1.25; } },
+  // C7 (v3.0): the maxable extra life
+  phoenix:  { name: 'Phoenix Protocol', icon: '🔥', color: OR, max: 4, unlock: () => G.bossNum >= 3 || G.time >= 420,
+    desc: 'Charge to MAX: rise from death once. Burns back to rank 0 when used.',
+    apply() {
+      S().phoenixLv = (S().phoenixLv || 0) + 1;
+      if ((player.passives.phoenix || 0) >= this.max) {
+        player.phoenixReady = true;
+        floater(player.x, player.y - 70, '🔥 PHOENIX PROTOCOL ARMED', OR, 18);
+      }
+    } },
 };
 const PASSIVE_IDS = Object.keys(PASSIVES);
 
@@ -4431,6 +4468,12 @@ function drawHUD() {
   ctx.strokeStyle = rgba(WH, 0.3); ctx.lineWidth = 1; ctx.strokeRect(hx, hy, hw, hh);
   ctx.fillStyle = WH; ctx.font = '700 11px Segoe UI, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillText(Math.ceil(player.hp) + ' / ' + player.maxHp, hx + 8, hy + hh / 2 + 1);
+  // C7: Phoenix armed indicator above the HP bar
+  if (player.phoenixReady) {
+    const pa = 0.7 + 0.3 * Math.sin(G.time * 5);
+    ctx.fillStyle = rgba(OR, pa); ctx.font = '800 12px Segoe UI, sans-serif';
+    ctx.fillText('🔥 PHOENIX ARMED', hx + 2, hy - 12);
+  }
 
   // weapon loadout: colored disc + level pips (font-free, crisp everywhere)
   let wx = pad;
@@ -4632,6 +4675,7 @@ function startGame() {
   player.buffT = { triple: 0, nectar: 0, aura: 0, auraTick: 0 };
   player.level = 1; player.xp = 0; player.xpNext = 6;
   player.invuln = 0; player.dashCD = 0; player.dashTime = 0;
+  player.phoenixReady = false; player.sporeAcc = 0;
   player.weapons = []; player.passives = {};
   player.stats = freshStats();
   recalc(); player.hp = player.maxHp;
