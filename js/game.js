@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '3.0';
+const VERSION = '3.1';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -541,7 +541,7 @@ const player = {
   weapons: [],
   passives: {},                   // id -> level
   stats: null,
-  buffT: { triple: 0, nectar: 0, aura: 0, auraTick: 0 },  // timed boss buffs (seconds left)
+  buffT: { triple: 0, nectar: 0, aura: 0, auraTick: 0, surge: 0, longdash: 0, guard: 0 },  // timed buffs (seconds left)
 };
 function freshStats() {
   return {
@@ -559,7 +559,7 @@ function tryDash() {
   const mv = moveVector();
   let d = (mv.mag > 0) ? { x: mv.x, y: mv.y } : { x: Math.cos(player.aim), y: Math.sin(player.aim) };
   player.dashDir = d;
-  player.dashTime = DASH_TIME * S().dashRangeMul;   // C6 Overdrive Thrusters
+  player.dashTime = DASH_TIME * S().dashRangeMul * (player.buffT.longdash > 0 ? LONGDASH_MUL : 1);   // C6 Overdrive + C8 Long Dash
   player.dashCD = DASH_CD * S().dashCdMul;
   player.invuln = Math.max(player.invuln, DASH_IFRAME * S().invulnMul);
   sfx('dash');
@@ -575,7 +575,7 @@ function hurtPlayer(dmg, srcX, srcY) {
   player.hp -= real;
   G.dirDps += real;                       // feeds the hidden stress signal
   if (srcX !== undefined) G.dmgDir = { a: angTo(player.x, player.y, srcX, srcY), t: DMG_IND_T };
-  player.invuln = 0.75 * S().invulnMul;             // C6 Ghost Protocol
+  player.invuln = 0.75 * S().invulnMul * (player.buffT.guard > 0 ? GUARD_IFRAME : 1);  // C6 Ghost + C8 Guard
   G.shake = Math.min(1, G.shake + 0.5);
   G.flash = 0.6; G.flashColor = RD;
   G.hitstop = Math.max(G.hitstop, 0.06);
@@ -3546,6 +3546,14 @@ function damageEnemy(e, dmg, opts) {
 const DROP_HEAL_CHANCE   = 0.004;
 const DROP_MAGNET_CHANCE = 0.007;
 const DROP_BOMB_CHANCE   = 0.009;
+// C8 (v3.1): normal enemies can drop three 8s combat buffs
+const DROP_SURGE_CHANCE    = 0.014;   // cumulative thresholds (after bomb)
+const DROP_LONGDASH_CHANCE = 0.019;
+const DROP_GUARD_CHANCE    = 0.024;
+const C8_BUFF_T = 8;                  // s every C8 buff lasts
+const SURGE_MOVE = 1.35;              // +35% move speed
+const LONGDASH_MUL = 1.6;             // +60% dash distance
+const GUARD_IFRAME = 1.3;             // +30% post-hit invulnerability time
 function killEnemy(e, reward) {
   if (e.dead) return;
   e.dead = true;
@@ -3602,6 +3610,9 @@ function killEnemy(e, reward) {
       if (roll < DROP_HEAL_CHANCE) spawnPickup(e.x, e.y, 'heal');
       else if (roll < DROP_MAGNET_CHANCE) spawnPickup(e.x, e.y, 'magnet');
       else if (roll < DROP_BOMB_CHANCE) spawnPickup(e.x, e.y, 'bomb');
+      else if (roll < DROP_SURGE_CHANCE) spawnPickup(e.x, e.y, 'surge');
+      else if (roll < DROP_LONGDASH_CHANCE) spawnPickup(e.x, e.y, 'longdash');
+      else if (roll < DROP_GUARD_CHANCE) spawnPickup(e.x, e.y, 'guard');
     }
 
     // splitter children
@@ -3629,7 +3640,7 @@ function spawnGem(x, y, value) {
   }
   G.gems.push({ x, y, value, vx: rand(-40, 40), vy: rand(-40, 40), mag: false, t: 0 });
 }
-const PICKUP_COLOR = { heal: GR, magnet: BL, bomb: OR, prism: CY, nectar: GR, cleansave: MA, tempo: CY, singularity: PU, glyph: YE, ascendant: WH };
+const PICKUP_COLOR = { heal: GR, magnet: BL, bomb: OR, prism: CY, nectar: GR, cleansave: MA, tempo: CY, singularity: PU, glyph: YE, ascendant: WH, surge: CY, longdash: YE, guard: BL };
 function spawnPickup(x, y, type, opts) {
   const p = { x, y, type, t: 0, vy: 0 };
   if (opts) Object.assign(p, opts);
@@ -3682,6 +3693,9 @@ function updateBuffs(dt) {
   const b = player.buffT;
   if (b.triple > 0) b.triple -= dt;
   if (b.nectar > 0) b.nectar -= dt;
+  if (b.surge > 0) b.surge -= dt;
+  if (b.longdash > 0) b.longdash -= dt;
+  if (b.guard > 0) b.guard -= dt;
   if (b.aura > 0) {
     b.aura -= dt;
     b.auraTick -= dt;
@@ -3732,6 +3746,18 @@ function applyPickup(type, p) {
     player.buffT.aura = BUFF_AURA_T; player.buffT.auraTick = 0;
     floater(player.x, player.y - 24, 'SINGULARITY', PU, 18); sfx('coin');
     for (let i = 0; i < 16; i++) spawnParticle(player.x, player.y, rand(-130, 130), rand(-130, 130), 0.6, 3, PU, 'spark');
+  } else if (type === 'surge') {            // C8 — overdrive legs (+move speed)
+    player.buffT.surge = C8_BUFF_T;
+    floater(player.x, player.y - 24, 'SPEED SURGE', CY, 18); sfx('coin');
+    for (let i = 0; i < 12; i++) spawnParticle(player.x, player.y, rand(-130, 130), rand(-130, 130), 0.45, 3, CY, 'spark');
+  } else if (type === 'longdash') {         // C8 — dash extender
+    player.buffT.longdash = C8_BUFF_T;
+    floater(player.x, player.y - 24, 'LONG DASH', YE, 18); sfx('coin');
+    for (let i = 0; i < 12; i++) spawnParticle(player.x, player.y, rand(-130, 130), rand(-130, 130), 0.45, 3, YE, 'spark');
+  } else if (type === 'guard') {            // C8 — reinforced i-frames on hit
+    player.buffT.guard = C8_BUFF_T;
+    floater(player.x, player.y - 24, 'GUARD FRAME', BL, 18); sfx('coin');
+    for (let i = 0; i < 12; i++) spawnParticle(player.x, player.y, rand(-130, 130), rand(-130, 130), 0.45, 3, BL, 'spark');
   } else if (type === 'glyph') {            // ARCHITECT Glyph Fragment (Section D)
     if (p && p.glyphId) G.glyphs[p.glyphId] = true;
     const n = Object.keys(G.glyphs).length;
@@ -3953,7 +3979,7 @@ function update(dt) {
       player.vy = player.dashDir.y * speed * DASH_SPEED_MUL * DASH_VEL_CARRY;
     }
   } else {
-    const ms = speed * G.playerSlow;            // disruptor fields drag this below 1
+    const ms = speed * G.playerSlow * (player.buffT.surge > 0 ? SURGE_MOVE : 1);  // disruptors drag below 1; C8 surge boosts
     // quick turn-response (Section F): steer harder the more the input opposes
     // current velocity — direction changes feel snappy, never ice-skating
     let resp = MOVE_LERP;
@@ -4267,6 +4293,14 @@ function render() {
     } else if (p.type === 'singularity') {   // ring + core
       ctx.beginPath(); ctx.arc(0, 0, 5, 0, TAU); ctx.stroke();
       ctx.beginPath(); ctx.arc(0, 0, 2, 0, TAU); ctx.fill();
+    } else if (p.type === 'surge') {         // speed chevron →
+      ctx.beginPath(); ctx.moveTo(-5, -4); ctx.lineTo(2, 0); ctx.lineTo(-5, 4); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(2, -3); ctx.lineTo(6, 0); ctx.lineTo(2, 3); ctx.stroke();
+    } else if (p.type === 'longdash') {      // dash streak »—
+      ctx.beginPath(); ctx.moveTo(-6, 0); ctx.lineTo(6, 0); ctx.moveTo(2, -4); ctx.lineTo(6, 0); ctx.lineTo(2, 4); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-6, -3); ctx.lineTo(-2, -3); ctx.moveTo(-6, 3); ctx.lineTo(-2, 3); ctx.stroke();
+    } else if (p.type === 'guard') {         // shield
+      ctx.beginPath(); ctx.moveTo(0, -6); ctx.lineTo(5, -3); ctx.lineTo(5, 1); ctx.lineTo(0, 6); ctx.lineTo(-5, 1); ctx.lineTo(-5, -3); ctx.closePath(); ctx.stroke();
     } else if (p.type === 'glyph') {         // rune shard (diamond + dot)
       poly(0, 0, 6, 4, Math.PI / 4); ctx.stroke();
       ctx.beginPath(); ctx.arc(0, 0, 1.8, 0, TAU); ctx.fill();
@@ -4497,6 +4531,9 @@ function drawHUD() {
     if (player.buffT.triple > 0) buffs.push(['T', CY, player.buffT.triple / BUFF_TRIPLE_T]);
     if (player.buffT.nectar > 0) buffs.push(['N', GR, player.buffT.nectar / BUFF_NECTAR_T]);
     if (player.buffT.aura > 0) buffs.push(['A', PU, player.buffT.aura / BUFF_AURA_T]);
+    if (player.buffT.surge > 0) buffs.push(['S', CY, player.buffT.surge / C8_BUFF_T]);
+    if (player.buffT.longdash > 0) buffs.push(['D', YE, player.buffT.longdash / C8_BUFF_T]);
+    if (player.buffT.guard > 0) buffs.push(['G', BL, player.buffT.guard / C8_BUFF_T]);
     let bxp = pad; const byp = wy - 22;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     for (const bf of buffs) {
@@ -4672,7 +4709,7 @@ function startGame() {
   enemyId = 1;
   touches.clear(); joyId = null;          // never carry touch state across runs
   player.x = player.y = 0; player.vx = player.vy = 0;
-  player.buffT = { triple: 0, nectar: 0, aura: 0, auraTick: 0 };
+  player.buffT = { triple: 0, nectar: 0, aura: 0, auraTick: 0, surge: 0, longdash: 0, guard: 0 };
   player.level = 1; player.xp = 0; player.xpNext = 6;
   player.invuln = 0; player.dashCD = 0; player.dashTime = 0;
   player.phoenixReady = false; player.sporeAcc = 0;

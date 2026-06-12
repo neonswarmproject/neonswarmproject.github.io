@@ -4,6 +4,16 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v3.1 — 2026-06-12 — Enemy combat-buff drops
+
+Normal enemies now rarely drop three new 8-second buffs (HUD icons with time
+bars, distinct pickup glyphs):
+
+- **→ Speed Surge:** +35% move speed.
+- **» Long Dash:** +60% dash distance (stacks with Overdrive Thrusters).
+- **🛡 Guard Frame:** +30% post-hit invulnerability time (stacks with Ghost
+  Protocol).
+
 ## v3.0 — 2026-06-12 — Phoenix Protocol (the maxable extra life)
 
 - **🔥 Phoenix Protocol** (LATE TECH ability, 4 ranks): charge it to MAX and

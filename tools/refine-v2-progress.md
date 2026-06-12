@@ -57,8 +57,9 @@ for every tunable. Zero console errors desktop + mobile.
 - [x] C7 Phoenix Protocol (v3.0): 4-rank LATE TECH ability; at max it arms an
       extra life (HUD indicator); death → rise at 60% HP, 2.5s i-frames,
       bullet-erase + 380px nova; rank resets to 0 on use and must be refilled
-- [ ] C8 Enemy drops (8s duration each): +move speed / longer dash / +30%
-      i-frame time on hit
+- [x] C8 Enemy drops (v3.1): Speed Surge (+35% move), Long Dash (+60% dash
+      distance), Guard Frame (+30% i-frame time) — 8s each, HUD time bars,
+      unique pickup glyphs, cumulative drop roll after heal/magnet/bomb
 
 ### Save, shop & skins
 - [ ] S1 Persistent save (localStorage): coins, owned/equipped skins, record,
