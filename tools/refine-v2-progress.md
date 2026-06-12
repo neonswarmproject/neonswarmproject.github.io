@@ -75,8 +75,10 @@ for every tunable. Zero console errors desktop + mobile.
       live animated previews, buy/equip/equipped states, coin balance,
       Esc-close + key guard; prices 100→1000⬡
 ### Bosses — elevate ALL to Architect standard
-- [ ] B1 SENTINEL TRINITY — three coordinated bodies, Architect-grade
-      animation + telegraphs; drops a unique relic/glyph
+- [x] B1 SENTINEL TRINITY (v3.6): prime + 2 phantom projections in rotating
+      formation; tri-beam edges, staggered led volleys, lance relay, phase-3
+      overclock duty cycle; crown marks the damageable body; glyph #7 joins
+      the sigil set automatically
 - [ ] B2 LEVIATHAN — segmented serpent, Architect-grade; unique relic
 - [ ] B3 OBELISK — monolithic arena-control boss, Architect-grade; relic
 - [ ] B4 MIRROR — LEARNS from the player from spawn until the fight (weapons,

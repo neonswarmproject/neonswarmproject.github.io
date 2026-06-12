@@ -4,6 +4,23 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v3.6 — 2026-06-12 — SENTINEL TRINITY (new roster boss)
+
+Three bodies, one will — the first of the five new roster bosses, built to
+the Architect bar:
+
+- A rotating triangle formation drifts after you. Only the **PRIME** (bigger,
+  white-eyed, crowned) takes damage; the two phantom projections still cut
+  and ram — shoot the crown.
+- **TRI-BEAM:** the triangle's edges telegraph, then BURN while the formation
+  keeps spinning — being inside (or lazy) gets cut. Phase 3 **OVERCLOCK**
+  keeps the edges hot on a duty cycle: white blink = about to burn.
+- **Staggered volleys:** vertices fire velocity-led fans in 120° rhythm.
+- **LANCE RELAY (phase 2+):** vertices take turns spearing through your
+  position along a telegraphed white lance, then snap back to formation.
+- Formation tightens and spins faster each phase. Drops a Guard Frame.
+- The SIGIL now needs 7 glyphs — TRINITY's joins the ritual set.
+
 ## v3.5 — 2026-06-12 — THE HANGAR (skin shop)
 
 - New **⬡ HANGAR** button beside PLAY opens the shop overlay: 11 skin cards

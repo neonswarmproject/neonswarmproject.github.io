@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '3.5';
+const VERSION = '3.6';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -2225,7 +2225,7 @@ function director(dt) {
    suppresses normal spawns and sweeps the arena on arrival; when the bag
    refills, bossTier++ and bosses return stronger.
    ========================================================================= */
-const BOSS_IDS = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden'];
+const BOSS_IDS = ['overlord', 'prism', 'hive', 'glitch', 'conductor', 'warden', 'trinity'];
 // v2 boss-rush: a shuffled bag picks the next boss — no repeats within a cycle
 // and OVERLORD has no guaranteed intro slot. Scaling comes from ELAPSED TIME +
 // completed cycles (tier), never a per-boss difficulty rank, so a "hard" boss
@@ -2450,6 +2450,14 @@ const HIVE_RESIN_TELE = 0.7;   // telegraph before a puddle turns sticky
 const GLITCH_CORRUPT_CD = 5, GLITCH_CORRUPT_N = 4, GLITCH_CORRUPT_R = 110, GLITCH_CORRUPT_TELE = 0.9;
 const COND_GAPRING_SPD = 180, COND_GAPRING_N = 36, COND_GAPRING_GAP = 5;
 const WARDEN_LANCE_CD = 5, WARDEN_LANCE_N = 3, WARDEN_LANCE_TELE = 0.7, WARDEN_LANCE_SPD = 520;
+// B1 (v3.6) SENTINEL TRINITY — three bodies, one will. Only the PRIME (crown)
+// takes damage; the other two are phantom projections that still cut and ram.
+const TRI_R0 = 150, TRI_R1 = 120, TRI_R2 = 95;   // formation radius per phase
+const TRI_SPIN = 0.55;                            // rad/s base formation spin
+const TRI_BEAM_CD = 5.2, TRI_BEAM_TELE = 0.85, TRI_BEAM_DUR = 2.2, TRI_BEAM_W = 14;
+const TRI_VOLLEY_CD = 2.6, TRI_VOLLEY_STAGGER = 0.4, TRI_BSPD = 210;
+const TRI_LUNGE_CD = 6.5, TRI_LUNGE_TELE = 0.55, TRI_LUNGE_T = 0.42, TRI_LUNGE_OVER = 240;
+const TRI_BLINK_ON = 2.6, TRI_BLINK_OFF = 0.9;    // OVERCLOCK edge duty cycle
 
 /* ---- THE ARCHITECT (Section D): voluntary super-boss. Fixed, brutal stats —
    deliberately NOT touched by the adaptive director or build scaling. ---- */
@@ -2969,6 +2977,151 @@ const BOSSES = {
      Voluntary super-boss: 5 phases, 4 destructible rune nodes shielding the
      core, evolved versions of every roster boss's signature, fixed brutal
      stats. Summoned only via the forged SIGIL. ---- */
+  /* ---- SLOT 6 (B1, v3.6): SENTINEL TRINITY — three bodies, one will ---- */
+  trinity: {
+    id: 'trinity', name: 'SENTINEL TRINITY', color: BL, r: 40, speed: 46, hpMul: 1.3,
+    drop: 'guard', phaseThresholds: [0.66, 0.33],
+    update(e, dt) {
+      const d = e.data;
+      if (!d.init) {
+        d.init = true;
+        d.cx = e.x; d.cy = e.y; d.formA = rand(0, TAU);
+        d.units = [{ x: e.x, y: e.y }, { x: e.x, y: e.y }];
+        d.beamState = 'idle'; d.beamCD = TRI_BEAM_CD * 0.7;
+        d.volT = TRI_VOLLEY_CD; d.volK = 0; d.lungeCD = TRI_LUNGE_CD;
+      }
+      const R = [TRI_R0, TRI_R1, TRI_R2][Math.min(e.phase, 2)];
+      const spin = TRI_SPIN * (1 + e.phase * 0.55);
+      d.formA += spin * dt;
+      // the formation's center drifts toward the player
+      const ca = angTo(d.cx, d.cy, player.x, player.y);
+      d.cx += Math.cos(ca) * e.speed * dt; d.cy += Math.sin(ca) * e.speed * dt;
+      const lim = ARENA / 2 - R - 40;
+      d.cx = clamp(d.cx, -lim, lim); d.cy = clamp(d.cy, -lim, lim);
+      const vxAt = k => d.cx + Math.cos(d.formA + k / 3 * TAU) * R;
+      const vyAt = k => d.cy + Math.sin(d.formA + k / 3 * TAU) * R;
+      const pos = k => k === 0 ? e : d.units[k - 1];
+      // vertices snap to formation unless mid-lunge
+      for (let k = 0; k < 3; k++) {
+        if (d.lunge && d.lunge.k === k && d.lunge.st === 'go') continue;
+        const P = pos(k); P.x = vxAt(k); P.y = vyAt(k);
+        if (k === 0) { e.vx = 0; e.vy = 0; }
+      }
+      // damaging triangle edges (the signature)
+      const triEdges = (mul, warn) => {
+        for (let k = 0; k < 3; k++) {
+          const A = pos(k), B = pos((k + 1) % 3);
+          G.beams.push({ x1: A.x, y1: A.y, x2: B.x, y2: B.y, w: TRI_BEAM_W, life: 0.05, max: 0.05, color: warn ? WH : BL });
+          if (!warn && segDist(A.x, A.y, B.x, B.y, player.x, player.y) < TRI_BEAM_W / 2 + player.r)
+            hurtPlayer(e.dmg * B_BEAM * mul, (A.x + B.x) / 2, (A.y + B.y) / 2);
+        }
+      };
+      if (e.phase < 2) {
+        // TRI-BEAM volleys: edges charge (telegraph), then burn
+        if (d.beamState === 'idle') {
+          d.beamCD -= dt;
+          if (d.beamCD <= 0) {
+            d.beamState = 'tele'; d.beamT = TRI_BEAM_TELE;
+            for (let k = 0; k < 3; k++) {
+              const A = pos(k), B = pos((k + 1) % 3);
+              addTelegraph({ kind: 'line', x: A.x, y: A.y, a: angTo(A.x, A.y, B.x, B.y), len: dist(A.x, A.y, B.x, B.y), w: 8, dur: TRI_BEAM_TELE, color: BL });
+            }
+            sfx('zap');
+          }
+        } else if (d.beamState === 'tele') {
+          d.beamT -= dt; if (d.beamT <= 0) { d.beamState = 'fire'; d.beamT = TRI_BEAM_DUR; }
+        } else {
+          d.beamT -= dt;
+          triEdges(1, false);
+          if (d.beamT <= 0) { d.beamState = 'idle'; d.beamCD = TRI_BEAM_CD; }
+        }
+      } else {
+        // OVERCLOCK (phase 3): edges run a duty cycle — white blink = about to burn
+        if (d.dutyOn === undefined) { d.dutyOn = false; d.dutyT = TRI_BLINK_OFF; }
+        d.dutyT -= dt;
+        if (d.dutyT <= 0) { d.dutyOn = !d.dutyOn; d.dutyT = d.dutyOn ? TRI_BLINK_ON : TRI_BLINK_OFF; }
+        if (d.dutyOn) triEdges(0.6, false);
+        else if (d.dutyT < 0.35) triEdges(0, true);   // warning blink, no damage
+      }
+      // staggered aimed volleys — one vertex at a time, 120° apart
+      d.volT -= dt;
+      if (d.volT <= 0) {
+        d.volK = (d.volK + 1) % 3;
+        d.volT = d.volK === 0 ? TRI_VOLLEY_CD - TRI_VOLLEY_STAGGER * 2 : TRI_VOLLEY_STAGGER;
+        const A = pos(d.volK);
+        const base = angTo(A.x, A.y, player.x + player.vx * 0.3, player.y + player.vy * 0.3);
+        const n = e.phase >= 2 ? 5 : 3;
+        for (let j = 0; j < n; j++) {
+          const a = base + (j - (n - 1) / 2) * 0.16;
+          spawnEnemyProjectile(A.x, A.y, Math.cos(a) * TRI_BSPD, Math.sin(a) * TRI_BSPD, e.dmg * B_BULLET, [BL, CY, WH][d.volK], { r: 6 });
+        }
+        e.flash = 0.6;
+      }
+      // LANCE RELAY (phase 2+): vertices take turns spearing through the player
+      if (e.phase >= 1) {
+        if (!d.lunge) {
+          d.lungeCD -= dt;
+          if (d.lungeCD <= 0) {
+            d.lungeCD = TRI_LUNGE_CD * (e.phase >= 2 ? 0.7 : 1);
+            const k = (d.lungeK = ((d.lungeK ?? -1) + 1) % 3);
+            const A = pos(k);
+            const aim = angTo(A.x, A.y, player.x, player.y);
+            const dd = dist(A.x, A.y, player.x, player.y) + TRI_LUNGE_OVER;
+            d.lunge = { k, st: 'tele', t: TRI_LUNGE_TELE, x0: A.x, y0: A.y, x1: A.x + Math.cos(aim) * dd, y1: A.y + Math.sin(aim) * dd };
+            addTelegraph({ kind: 'line', x: A.x, y: A.y, a: aim, len: dd, w: 26, dur: TRI_LUNGE_TELE, color: WH });
+            sfx('zap');
+          }
+        } else {
+          const L = d.lunge; L.t -= dt;
+          if (L.st === 'tele') {
+            if (L.t <= 0) { L.st = 'go'; L.t = TRI_LUNGE_T; sfx('dash'); }
+          } else {
+            const P = pos(L.k);
+            const f = clamp(1 - L.t / TRI_LUNGE_T, 0, 1);
+            const ease = f * f * (3 - 2 * f);
+            P.x = lerp(L.x0, L.x1, ease); P.y = lerp(L.y0, L.y1, ease);
+            if (Math.random() < 0.6) spawnParticle(P.x, P.y, rand(-60, 60), rand(-60, 60), 0.25, 3, BL, 'spark');
+            if (dist2(P.x, P.y, player.x, player.y) < (e.r * 0.8 + player.r) ** 2) hurtPlayer(e.dmg * 0.8, P.x, P.y);
+            if (L.t <= 0) d.lunge = null;   // the formation reclaims the vertex
+          }
+        }
+      }
+    },
+    onPhase(e, ph) {
+      floater(e.x, e.y - e.r - 40, ['', 'RELAY ENGAGED', 'OVERCLOCK'][Math.min(ph, 2)], BL, 24);
+      bossRing(e, 20 + ph * 8, 200, B_BULLET, rand(0, TAU), BL);
+    },
+    draw(e) {
+      const d = e.data; if (!d || !d.units) return;
+      const t = G.time;
+      const P = [e, d.units[0], d.units[1]];
+      // filaments between the three (faint; the beams themselves render hot)
+      ctx.strokeStyle = rgba(BL, 0.18); ctx.lineWidth = 1.5;
+      for (let k = 0; k < 3; k++) {
+        const A = P[k], B = P[(k + 1) % 3];
+        ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.stroke();
+      }
+      // formation core sigil
+      ctx.strokeStyle = rgba(WH, 0.12); ctx.lineWidth = 1;
+      poly(d.cx, d.cy, 16 + Math.sin(t * 2) * 3, 3, d.formA + Math.PI / 6); ctx.stroke();
+      for (let k = 0; k < 3; k++) {
+        const A = P[k], prime = k === 0;
+        const rr = prime ? e.r : e.r * 0.78;
+        glow(A.x, A.y, rr * 1.4, BL, prime ? 0.55 : 0.4);
+        ctx.fillStyle = rgba(prime ? BL : '#5fa8ff', prime ? 0.14 : 0.08);
+        ctx.strokeStyle = rgba(WH, prime ? 0.95 : 0.45); ctx.lineWidth = prime ? 4 : 2.5;
+        poly(A.x, A.y, rr, 4, d.formA * (prime ? 1 : -1) + k); ctx.fill(); ctx.stroke();
+        ctx.strokeStyle = rgba(BL, prime ? 0.85 : 0.5); ctx.lineWidth = 2;
+        poly(A.x, A.y, rr * 0.55, 4, -d.formA * 1.4 + k); ctx.stroke();
+        glow(A.x, A.y, rr * 0.26 + Math.sin(t * 5 + k) * 2, prime ? WH : CY, prime ? 0.95 : 0.6);
+        if (prime) {   // the crown marks the only damageable body
+          ctx.strokeStyle = rgba(YE, 0.85); ctx.lineWidth = 2;
+          poly(A.x, A.y - rr - 12, 6, 3, Math.PI); ctx.stroke();
+        }
+      }
+    },
+  },
+
   architect: {
     id: 'architect', name: 'THE ARCHITECT', color: PU, r: ARCH_R, speed: ARCH_SPEED, hpMul: 1,
     drop: 'ascendant', phaseThresholds: [0.8, 0.6, 0.4, 0.2],
