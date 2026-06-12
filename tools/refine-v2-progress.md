@@ -67,8 +67,10 @@ for every tunable. Zero console errors desktop + mobile.
       best/meta keys untouched; coin balance on title screen
 - [x] S2 Boss coin bounties (v3.3): roster 10⬡ (+2/cycle), ARCHITECT 40⬡;
       floaters + persisted via PROFILE; Developer premium reserved for P3
-- [ ] S3 Skin system research + design (how 2D games do skins well), then the
-      skin layer over the player render (palette/trail/shape/FX)
+- [x] S3 Skin system (v3.4): researched 2D skin practices (ramps, silhouette
+      preservation, VFX tiers); SKINS registry (11 skins, 3 tiers) wired
+      through drawPlayer/flames/halo/glow/dash-trail; buySkin/equipSkin
+      persisted via PROFILE
 - [ ] S4 Title-screen SHOP with 10 creative skins — cheapest ≈ 10 bosses of
       coins, flagship ≈ 100 bosses
 ### Bosses — elevate ALL to Architect standard

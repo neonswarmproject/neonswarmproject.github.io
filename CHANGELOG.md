@@ -4,6 +4,24 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v3.4 — 2026-06-12 — Skin system (research-grounded)
+
+Data-driven cosmetic layer over the player render, built on 2D-skin best
+practices (consistent color ramps, silhouette preservation, VFX as the
+premium tier — silhouette never changes, so readability survives):
+
+- 11 skins in three tiers. T1 palette swaps: Bloodline Protocol, Toxin
+  Runner, Royal Phantom, Solar Forge. T2 VFX: Glacier Knife (frost wake),
+  Ghostlight (translucent hull), Ember Cascade (sheds live embers), Prism
+  Current (hue-cycling hull + rainbow dash trail). T3 regalia: Void
+  Sovereign (gravity aura + orbitals), Architect's Heir (white-gold sigil
+  ring + orbiting shards).
+- Skins recolor body/stroke/glow, thruster flames, idle halo, the player
+  glow underlay, and the dash ghost trail (soft-wide for ghost/frost,
+  spectrum-cycling for prism).
+- buySkin()/equipSkin() persist through the profile; prices 100 → 1000 ⬡
+  (≈10 → ≈100 roster bosses). Shop UI lands in v3.5.
+
 ## v3.3 — 2026-06-12 — Boss coin bounties
 
 - Every roster boss kill pays **10 ⬡** (+2 per completed boss cycle); THE

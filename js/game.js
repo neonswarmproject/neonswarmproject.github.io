@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '3.3';
+const VERSION = '3.4';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -313,6 +313,54 @@ function loadProfile() {
 const PROFILE = loadProfile();
 function saveProfile() { try { localStorage.setItem(PROFILE_KEY, JSON.stringify(PROFILE)); } catch (e) {} }
 function addCoins(n) { PROFILE.coins = Math.max(0, PROFILE.coins + n); saveProfile(); }
+
+/* ---- S3 (v3.4): SKINS — a data-driven cosmetic layer over the player.
+   Research-grounded tiers: T1 = palette swaps with consistent light/dark
+   ramps; T2 = palette + trail/flame VFX; T3 = additive geometry (auras,
+   orbitals). The ship's SILHOUETTE is never altered — readability is sacred
+   in a bullet heaven. Prices: cheapest ≈ 10 roster bosses, flagship ≈ 100. */
+const SKINS = {
+  default:  { name: 'Neon Vanguard', price: 0, tier: 0, desc: 'The original cyan razor.',
+              body: CY, stroke: WH, glow: CY, flameA: OR, flameB: YE, halo: CY, trail: CY },
+  bloodline:{ name: 'Bloodline Protocol', price: 100, tier: 1, desc: 'Scarlet hunter ramp.',
+              body: RD, stroke: '#ffd9e0', glow: RD, flameA: OR, flameB: YE, halo: PK, trail: RD },
+  toxin:    { name: 'Toxin Runner', price: 120, tier: 1, desc: 'Acid-green hazard ramp.',
+              body: GR, stroke: '#eaffea', glow: GR, flameA: YE, flameB: WH, halo: GR, trail: GR },
+  royal:    { name: 'Royal Phantom', price: 150, tier: 1, desc: 'Violet royalty ramp.',
+              body: PU, stroke: '#f1e3ff', glow: PU, flameA: MA, flameB: PK, halo: MA, trail: PU },
+  solar:    { name: 'Solar Forge', price: 180, tier: 1, desc: 'Forged gold and amber.',
+              body: YE, stroke: WH, glow: OR, flameA: OR, flameB: WH, halo: YE, trail: OR },
+  glacier:  { name: 'Glacier Knife', price: 250, tier: 2, desc: 'Ice-cold edge, wide frost wake.',
+              body: '#7fe9ff', stroke: WH, glow: '#7fe9ff', flameA: '#7fe9ff', flameB: WH, halo: WH, trail: '#bff4ff', trailKind: 'frost' },
+  ghost:    { name: 'Ghostlight', price: 300, tier: 2, desc: 'Translucent spectre hull.',
+              body: '#dffaff', stroke: WH, glow: WH, flameA: '#bfefff', flameB: WH, halo: WH, trail: WH, alpha: 0.55, trailKind: 'ghost' },
+  ember:    { name: 'Ember Cascade', price: 380, tier: 2, desc: 'Charred hull shedding live embers.',
+              body: '#2a1408', stroke: OR, glow: OR, flameA: RD, flameB: OR, halo: OR, trail: OR, trailKind: 'embers' },
+  prismsk:  { name: 'Prism Current', price: 450, tier: 2, desc: 'A hull surfing the whole spectrum.',
+              body: CY, stroke: WH, glow: WH, flameA: MA, flameB: WH, halo: WH, trail: CY, hueCycle: true, trailKind: 'prism' },
+  void:     { name: 'Void Sovereign', price: 650, tier: 3, desc: 'Black-hole regalia, dark gravity aura.',
+              body: '#120821', stroke: PU, glow: PU, flameA: PU, flameB: MA, halo: PU, trail: PU, extras: 'void' },
+  heir:     { name: "Architect's Heir", price: 1000, tier: 3, desc: 'White-gold geometry of the end boss.',
+              body: WH, stroke: '#ffd700', glow: '#ffd700', flameA: '#ffd700', flameB: WH, halo: '#ffd700', trail: '#ffe9a0', extras: 'sigil' },
+};
+const SKIN_IDS = Object.keys(SKINS);
+function SK() { return SKINS[PROFILE.skins.equipped] || SKINS.default; }
+function skinBodyFill(alphaMul) {
+  const sk = SK();
+  if (sk.hueCycle) return `hsla(${Math.floor((G.time * 60) % 360)},100%,65%,${0.9 * (sk.alpha || 1) * (alphaMul || 1)})`;
+  return rgba(sk.body, 0.9 * (sk.alpha || 1) * (alphaMul || 1));
+}
+function buySkin(id) {
+  const s = SKINS[id];
+  if (!s || PROFILE.skins.owned.includes(id) || PROFILE.coins < s.price) return false;
+  addCoins(-s.price);
+  PROFILE.skins.owned.push(id); saveProfile();
+  return true;
+}
+function equipSkin(id) {
+  if (!PROFILE.skins.owned.includes(id)) return false;
+  PROFILE.skins.equipped = id; saveProfile(); return true;
+}
 
 /* ===========================================================================
    5. INPUT
@@ -4297,7 +4345,7 @@ function render() {
   // player glow
   if (G.state === 'playing' || G.state === 'paused' || G.state === 'levelup') {
     const blink = player.invuln > 0 && Math.floor(G.time * 20) % 2 === 0;
-    if (!blink) glow(player.x, player.y, 26, CY, 0.9);
+    if (!blink) glow(player.x, player.y, 26, SK().glow, 0.9);
   }
 
   /* ---- crisp BODY pass ---- */
@@ -4426,11 +4474,16 @@ function render() {
   }
   // dash motion trail (Section F): ghost ships fading behind the dash
   if (G.trail.length) {
+    const skT = SK();
     ctx.globalCompositeOperation = 'lighter';
     for (const g of G.trail) {
-      const a = clamp(g.life / g.max, 0, 1) * 0.5;
+      const soft = skT.trailKind === 'ghost' || skT.trailKind === 'frost';
+      const a = clamp(g.life / g.max, 0, 1) * (soft ? 0.35 : 0.5);
       ctx.save(); ctx.translate(g.x, g.y); ctx.rotate(g.aim); ctx.globalAlpha = a;
-      ctx.fillStyle = rgba(CY, 0.8);
+      if (skT.trailKind === 'prism')
+        ctx.fillStyle = `hsla(${Math.floor((g.life / g.max * 300 + G.time * 60) % 360)},100%,65%,0.8)`;
+      else ctx.fillStyle = rgba(skT.trail, 0.8);
+      if (soft) ctx.scale(1.35, 1.35);
       ctx.beginPath(); ctx.moveTo(16, 0); ctx.lineTo(-11, 10); ctx.lineTo(-6, 0); ctx.lineTo(-11, -10);
       ctx.closePath(); ctx.fill();
       ctx.restore();
@@ -4460,7 +4513,12 @@ function render() {
 function drawPlayer() {
   const blink = player.invuln > 0 && Math.floor(G.time * 20) % 2 === 0;
   if (blink) return;
+  const sk = SK();
   const spd = Math.hypot(player.vx, player.vy);
+  // S3 'embers' skins shed live sparks while moving
+  if (sk.trailKind === 'embers' && spd > BASE_SPEED * 0.4 && Math.random() < 0.35)
+    spawnParticle(player.x - player.vx * 0.04, player.y - player.vy * 0.04,
+      rand(-30, 30), rand(20, 90), rand(0.3, 0.7), rand(1.5, 3), Math.random() < 0.5 ? OR : RD, 'spark');
   ctx.save();
   ctx.translate(player.x, player.y);
   ctx.rotate(player.aim);
@@ -4468,22 +4526,41 @@ function drawPlayer() {
   const flame = clamp(spd / (BASE_SPEED * 2), 0, 1);
   if (flame > 0.05) {
     const fl = 8 + 18 * flame + Math.sin(G.time * 40) * 3;
-    ctx.fillStyle = rgba(player.dashTime > 0 ? WH : OR, 0.85);
+    ctx.fillStyle = rgba(player.dashTime > 0 ? WH : sk.flameA, 0.85);
     ctx.beginPath(); ctx.moveTo(-8, 4.5); ctx.lineTo(-8 - fl, 0); ctx.lineTo(-8, -4.5); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = rgba(YE, 0.9);
+    ctx.fillStyle = rgba(sk.flameB, 0.9);
     ctx.beginPath(); ctx.moveTo(-8, 2.5); ctx.lineTo(-8 - fl * 0.55, 0); ctx.lineTo(-8, -2.5); ctx.closePath(); ctx.fill();
   }
-  ctx.shadowColor = CY; ctx.shadowBlur = 18;
-  ctx.fillStyle = rgba(CY, 0.9); ctx.strokeStyle = WH; ctx.lineWidth = 2;
+  ctx.shadowColor = sk.glow; ctx.shadowBlur = 18;
+  ctx.fillStyle = skinBodyFill(1); ctx.strokeStyle = sk.stroke; ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(16, 0); ctx.lineTo(-11, 10); ctx.lineTo(-6, 0); ctx.lineTo(-11, -10);
   ctx.closePath(); ctx.fill(); ctx.stroke();
   ctx.shadowBlur = 0;
   ctx.restore();
+  // S3 tier-3 extras — additive decoration only; the silhouette never changes
+  if (sk.extras === 'void') {
+    const pp = 0.5 + 0.5 * Math.sin(G.time * 3);
+    ctx.strokeStyle = rgba(PU, 0.25 + 0.2 * pp); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(player.x, player.y, player.r + 13 + pp * 3, 0, TAU); ctx.stroke();
+    for (let k = 0; k < 2; k++) {
+      const a = G.time * 2.4 + k * Math.PI;
+      glow(player.x + Math.cos(a) * (player.r + 13), player.y + Math.sin(a) * (player.r + 13), 4, PU, 0.8);
+    }
+  } else if (sk.extras === 'sigil') {
+    ctx.strokeStyle = rgba('#ffd700', 0.4); ctx.lineWidth = 1.5;
+    poly(player.x, player.y, player.r + 14, 6, G.time * 0.9); ctx.stroke();
+    for (let k = 0; k < 3; k++) {
+      const a = -G.time * 1.8 + k / 3 * TAU;
+      const ox = player.x + Math.cos(a) * (player.r + 14), oy = player.y + Math.sin(a) * (player.r + 14);
+      ctx.strokeStyle = rgba('#ffd700', 0.85); ctx.lineWidth = 1.5;
+      poly(ox, oy, 4, 3, a); ctx.stroke();
+    }
+  }
   // idle shimmer (Section J): a soft rotating tri-halo while hovering
   if (spd < 30) {
     const sh = 0.5 + 0.5 * Math.sin(G.time * 2.4);
-    ctx.strokeStyle = rgba(CY, 0.2 + 0.25 * sh); ctx.lineWidth = 1.5;
+    ctx.strokeStyle = rgba(sk.halo, 0.2 + 0.25 * sh); ctx.lineWidth = 1.5;
     poly(player.x, player.y, player.r + 5 + sh * 2, 3, player.aim + G.time * 0.8); ctx.stroke();
   }
   // dash cooldown ring
