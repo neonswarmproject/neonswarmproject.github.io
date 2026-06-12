@@ -4,6 +4,24 @@ All notable changes to **NEON SWARM**. The live build number is the `VERSION`
 constant in `js/game.js` (shown discreetly on the title screen). The published
 baseline was v1.0; each update bumps the minor version by 0.1.
 
+## v2.7 — 2026-06-12 — PRISM & HIVE anti-orbit redesign
+
+Circling at a constant radius no longer beats either boss.
+
+- **PRISM — refraction lock:** the boss tracks your orbit radius; holding it
+  near-constant for ~2.2s arms a white telegraphed detonation placed AHEAD of
+  your circling direction (angular-velocity lead). Change radius, dash, or
+  stop-and-go to defuse. From phase 2 its sweeping beams randomly REVERSE
+  direction (white blink warning) — orbit-matching the sweep gets cut on the
+  turn — and spectrum fans now lead your velocity. Sweep start direction is
+  random each volley. hpMul 1.05 → 1.15.
+- **THE HIVE — interception:** hex walls aim at your PREDICTED position, and
+  from phase 2 a second crossfire wall arrives at 90°, fencing an orbit path
+  from two sides. Every 2nd drone spawns as an INTERCEPTOR that launches
+  frenzied at your cut-off point instead of trailing you. Phase 2+ also drops
+  telegraphed RESIN puddles along your predicted path — standing in one slows
+  you to 55%, feeding you to the swarm. hpMul 1.15 → 1.25.
+
 ## v2.6 — 2026-06-11 — Boss lasers +110%
 
 - `B_BEAM` 0.8 → 1.68: every rotating/sweeping boss laser (OVERLORD's sweep,

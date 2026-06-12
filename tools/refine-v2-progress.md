@@ -41,8 +41,10 @@ for every tunable. Zero console errors desktop + mobile.
       reach boss stats (mercy + director already exclude bosses)
 - [x] C3 Boss rotating lasers +110% damage (v2.6) — B_BEAM 0.8→1.68 covers
       all four laser attacks (OVERLORD/PRISM/GLITCH/ARCHITECT)
-- [ ] C4 PRISM and HIVE anti-orbit redesign — circling them must stop working
-      (punish constant-radius movement; force engagement)
+- [x] C4 PRISM & HIVE anti-orbit redesign (v2.7) — PRISM: orbit-radius lock
+      detonations w/ angular lead, sweep reversals (white-blink warn), led
+      fans; HIVE: velocity-led walls + p2 crossfire, interceptor drones,
+      resin slow puddles on predicted path; hpMul bumps 1.15/1.25
 - [ ] C5 Five NEW weapons, all late-game unlocks (gated by run progress, not
       in the early card pool)
 - [ ] C6 Five NEW abilities, late-game unlocks — split super-dash into two

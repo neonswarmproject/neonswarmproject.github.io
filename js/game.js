@@ -26,7 +26,7 @@
 
 // Single source of truth for the build version (shown discreetly on the title
 // screen).
-const VERSION = '2.6';
+const VERSION = '2.7';
 
 /* ===========================================================================
    1. BOOT / CANVAS / PALETTE / MATH
@@ -1895,6 +1895,26 @@ const OVL_COMET_CD = 4.2, OVL_COMET_N = 5, OVL_COMET_SPD = 240;
 const OVL_LASER_CD = 7, OVL_LASER_TELE = 0.9, OVL_LASER_DUR = 2.2, OVL_LASER_N = 3, OVL_LASER_W = 20, OVL_LASER_SWEEP = 0.45, OVL_LASER_LEN = 1200;
 const PRISM_RAIN_CD = 4.5, PRISM_RAIN_N = 7, PRISM_RAIN_SPD = 330, PRISM_RAIN_TELE = 0.55;
 const HIVE_FRENZY_CD = 6, HIVE_FRENZY_T = 2.5, HIVE_FRENZY_MUL = 1.8, HIVE_EGG_SPREAD = 0.5;
+// C4 (v2.7): anti-orbit redesign — PRISM and HIVE punish constant-radius
+// circling and force real engagement.
+const PRISM_LOCK_WIN  = 2.2;   // s of near-constant orbit radius that arms the lock
+const PRISM_LOCK_TOL  = 80;    // px of radius variance still counted as "circling"
+const PRISM_LOCK_CD   = 3.4;   // s between locks
+const PRISM_LOCK_R    = 150;   // detonation radius
+const PRISM_LOCK_TELE = 0.85;  // telegraph time
+const PRISM_LOCK_LEAD = 0.55;  // s of angular lead — it detonates where you're HEADING
+const PRISM_FLIP_CD_MIN = 1.6, PRISM_FLIP_CD_MAX = 3.2;  // sweep reversal timer (phase 2+)
+const PRISM_FLIP_WARN = 0.35;  // beams blink white this long before reversing
+const PRISM_FAN_LEAD  = 0.5;   // s of velocity lead on spectrum fans
+const HIVE_WALL_LEAD  = 0.85;  // walls aim at the player's PREDICTED position
+const HIVE_INT_SPD    = 240;   // interceptor drones launch toward the cut-off point
+const HIVE_INT_LEAD   = 0.9;   // s of player-velocity lead for interceptors
+const HIVE_RESIN_CD   = 6.5;   // s between resin volleys (phase 2+)
+const HIVE_RESIN_N    = 3;     // puddles per volley
+const HIVE_RESIN_R    = 92;    // puddle radius
+const HIVE_RESIN_T    = 5.5;   // puddle lifetime after arming
+const HIVE_RESIN_SLOW = 0.55;  // move multiplier while standing in resin
+const HIVE_RESIN_TELE = 0.7;   // telegraph before a puddle turns sticky
 const GLITCH_CORRUPT_CD = 5, GLITCH_CORRUPT_N = 4, GLITCH_CORRUPT_R = 110, GLITCH_CORRUPT_TELE = 0.9;
 const COND_GAPRING_SPD = 180, COND_GAPRING_N = 36, COND_GAPRING_GAP = 5;
 const WARDEN_LANCE_CD = 5, WARDEN_LANCE_N = 3, WARDEN_LANCE_TELE = 0.7, WARDEN_LANCE_SPD = 520;
@@ -2006,23 +2026,65 @@ const BOSSES = {
 
   /* ---- SLOT 1: PRISM — The Refractor ---- */
   prism: {
-    id: 'prism', name: 'PRISM', color: CY, r: 54, speed: 40, hpMul: 1.05,
+    id: 'prism', name: 'PRISM', color: CY, r: 54, speed: 40, hpMul: 1.15,
     drop: 'prism', phaseThresholds: [0.66, 0.33],
     update(e, dt) {
       const d = e.data, cols = [CY, MA, YE];
       if (d.beamState === undefined) { d.beamState = 'idle'; d.beamCD = PRISM_BEAM_CD; }
+      // C4 anti-orbit: PRISM watches the player's orbit radius. Holding a
+      // near-constant distance arms a refraction LOCK that detonates AHEAD of
+      // the circling direction — change radius or stop-and-go to defuse it.
+      const pd = dist(e.x, e.y, player.x, player.y);
+      const pAng = angTo(e.x, e.y, player.x, player.y);
+      if (d.lockR === undefined) { d.lockR = pd; d.lockT = 0; d.lockCD = 0; d.prevAng = pAng; d.angVel = 0; d.locks = []; }
+      let dAng = pAng - d.prevAng;
+      while (dAng > Math.PI) dAng -= TAU; while (dAng < -Math.PI) dAng += TAU;
+      d.angVel = clamp(d.angVel * 0.9 + (dAng / Math.max(dt, 1e-4)) * 0.1, -3, 3);
+      d.prevAng = pAng;
+      d.lockR = d.lockR * 0.96 + pd * 0.04;
+      if (Math.abs(pd - d.lockR) < PRISM_LOCK_TOL && pd < PRISM_BEAM_LEN * 0.8) d.lockT += dt;
+      else d.lockT = Math.max(0, d.lockT - dt * 2);
+      d.lockCD -= dt;
+      if (d.lockT >= PRISM_LOCK_WIN && d.lockCD <= 0) {
+        d.lockCD = PRISM_LOCK_CD; d.lockT = 0;
+        const la = pAng + d.angVel * PRISM_LOCK_LEAD;
+        const lx = e.x + Math.cos(la) * pd, ly = e.y + Math.sin(la) * pd;
+        addTelegraph({ kind: 'zone', x: lx, y: ly, r: PRISM_LOCK_R, dur: PRISM_LOCK_TELE, color: WH });
+        d.locks.push({ x: lx, y: ly, t: PRISM_LOCK_TELE });
+        e.flash = 1; sfx('zap');
+      }
+      for (let i = d.locks.length - 1; i >= 0; i--) {
+        const L = d.locks[i]; L.t -= dt;
+        if (L.t > 0) continue;
+        d.locks.splice(i, 1);
+        spawnRing(L.x, L.y, 24, PRISM_LOCK_R, 0.45, WH);
+        G.shake = Math.min(1, G.shake + 0.3); sfx('nova');
+        if (dist2(L.x, L.y, player.x, player.y) < (PRISM_LOCK_R + player.r) ** 2) hurtPlayer(e.dmg * B_NOVA);
+      }
       // sweeping refraction beams
       if (d.beamState === 'idle') {
         d.beamCD -= dt;
-        if (d.beamCD <= 0) { d.beamState = 'tele'; d.beamT = PRISM_BEAM_TELE; d.beamAng = angTo(e.x, e.y, player.x, player.y); d.nb = e.phase + 1;
+        if (d.beamCD <= 0) { d.beamState = 'tele'; d.beamT = PRISM_BEAM_TELE; d.beamAng = angTo(e.x, e.y, player.x, player.y); d.nb = e.phase + 1; d.sweepDir = Math.random() < 0.5 ? 1 : -1;
           for (let k = 0; k < d.nb; k++) addTelegraph({ kind: 'line', x: e.x, y: e.y, a: d.beamAng + k / d.nb * TAU, len: PRISM_BEAM_LEN, w: 7, dur: PRISM_BEAM_TELE, color: cols[k % 3] }); }
       } else if (d.beamState === 'tele') {
         d.beamT -= dt; if (d.beamT <= 0) { d.beamState = 'fire'; d.beamT = PRISM_BEAM_FIRE; }
       } else {
-        d.beamT -= dt; d.beamAng += PRISM_BEAM_SWEEP * dt * (1 + e.phase * 0.4);
+        d.beamT -= dt;
+        // C4: from phase 2 the sweep REVERSES on a timer — beams blink white
+        // as the warning, then cut back through space an orbiter just cleared.
+        if (e.phase >= 1) {
+          d.flipT = (d.flipT ?? rand(PRISM_FLIP_CD_MIN, PRISM_FLIP_CD_MAX)) - dt;
+          if (d.flipT <= 0) {
+            d.flipT = rand(PRISM_FLIP_CD_MIN, PRISM_FLIP_CD_MAX);
+            d.sweepDir = -(d.sweepDir || 1);
+            e.flash = 1; sfx('zap');
+          }
+        }
+        const flipWarn = e.phase >= 1 && d.flipT !== undefined && d.flipT < PRISM_FLIP_WARN;
+        d.beamAng += PRISM_BEAM_SWEEP * dt * (1 + e.phase * 0.4) * (d.sweepDir || 1);
         for (let k = 0; k < d.nb; k++) {
           const a = d.beamAng + k / d.nb * TAU, ex = e.x + Math.cos(a) * PRISM_BEAM_LEN, ey = e.y + Math.sin(a) * PRISM_BEAM_LEN;
-          G.beams.push({ x1: e.x, y1: e.y, x2: ex, y2: ey, w: PRISM_BEAM_W, life: 0.05, max: 0.05, color: cols[k % 3] });
+          G.beams.push({ x1: e.x, y1: e.y, x2: ex, y2: ey, w: PRISM_BEAM_W, life: 0.05, max: 0.05, color: flipWarn ? WH : cols[k % 3] });
           if (segDist(e.x, e.y, ex, ey, player.x, player.y) < PRISM_BEAM_W / 2 + player.r) hurtPlayer(e.dmg * B_BEAM);
         }
         if (d.beamT <= 0) { d.beamState = 'idle'; d.beamCD = PRISM_BEAM_CD; }
@@ -2032,7 +2094,8 @@ const BOSSES = {
       if (d.specCD <= 0) {
         d.specCD = PRISM_SPEC_CD; e.flash = 1;
         for (let f = 0; f < 3; f++) {
-          const base = angTo(e.x, e.y, player.x, player.y) + (f - 1) * 0.7;
+          // C4: fans lead the player's velocity — steady circles get cut off
+          const base = angTo(e.x, e.y, player.x + player.vx * PRISM_FAN_LEAD, player.y + player.vy * PRISM_FAN_LEAD) + (f - 1) * 0.7;
           for (let k = -2; k <= 2; k++) { const a = base + k * 0.12; spawnEnemyProjectile(e.x, e.y, Math.cos(a) * PRISM_BSPD, Math.sin(a) * PRISM_BSPD, e.dmg * B_BULLET, cols[f], { kind: 'home', turn: 1.1, life: 3 }); }
         }
       }
@@ -2084,7 +2147,7 @@ const BOSSES = {
 
   /* ---- SLOT 2: THE HIVE — Dronemother (the spawner) ---- */
   hive: {
-    id: 'hive', name: 'THE HIVE', color: GR, r: 58, speed: 34, hpMul: 1.15,
+    id: 'hive', name: 'THE HIVE', color: GR, r: 58, speed: 34, hpMul: 1.25,
     drop: 'nectar', phaseThresholds: [0.6, 0.3],
     update(e, dt) {
       const d = e.data, p2 = e.phase >= 1;
@@ -2093,16 +2156,35 @@ const BOSSES = {
         d.droneCD = p2 ? HIVE_DRONE_CD * 0.6 : HIVE_DRONE_CD;
         const n = randi(3, 5);
         let minis = countType('mini');       // count once, not per spawned drone
-        for (let k = 0; k < n && minis < HIVE_DRONE_CAP; k++, minis++) { const a = k / n * TAU + e.rot; spawnEnemy('mini', e.x + Math.cos(a) * e.r, e.y + Math.sin(a) * e.r, { vx: Math.cos(a) * 90, vy: Math.sin(a) * 90 }); }
+        for (let k = 0; k < n && minis < HIVE_DRONE_CAP; k++, minis++) {
+          const a = k / n * TAU + e.rot;
+          const m = spawnEnemy('mini', e.x + Math.cos(a) * e.r, e.y + Math.sin(a) * e.r, { vx: Math.cos(a) * 90, vy: Math.sin(a) * 90 });
+          // C4: every 2nd drone is an INTERCEPTOR — it launches at the
+          // player's predicted position (velocity lead) in a brief frenzy,
+          // cutting off a circling path instead of trailing behind it.
+          if (m && (d.intToggle = !d.intToggle)) {
+            const ix = player.x + player.vx * HIVE_INT_LEAD - m.x, iy = player.y + player.vy * HIVE_INT_LEAD - m.y;
+            const il = Math.hypot(ix, iy) || 1;
+            m.vx = ix / il * HIVE_INT_SPD; m.vy = iy / il * HIVE_INT_SPD;
+            m.frenzy = 1.4; m.flash = 0.5;
+          }
+        }
       }
       d.wallCD = (d.wallCD ?? HIVE_WALL_CD) - dt;
       if (d.wallCD <= 0) {
         d.wallCD = HIVE_WALL_CD;
-        const base = angTo(e.x, e.y, player.x, player.y), perp = base + Math.PI / 2, count = 9, gap = randi(2, 6);
-        for (let row = 0; row < 2; row++) for (let k = 0; k < count; k++) {
-          if (Math.abs(k - gap) <= 1) continue;
-          const off = (k - (count - 1) / 2) * 38 + row * 19, ox = Math.cos(base) * -row * 30;
-          spawnEnemyProjectile(e.x + Math.cos(perp) * off + ox, e.y + Math.sin(perp) * off + Math.sin(base) * -row * 30, Math.cos(base) * HIVE_WALL_SPD, Math.sin(base) * HIVE_WALL_SPD, e.dmg * B_BULLET, YE, { arm: HIVE_WALL_TELE, r: 7 });
+        // C4: walls aim where the player is GOING (velocity lead); from
+        // phase 2 a second crossfire wall arrives at 90° so a steady orbit
+        // path is fenced from two sides at once.
+        const aims = [angTo(e.x, e.y, player.x + player.vx * HIVE_WALL_LEAD, player.y + player.vy * HIVE_WALL_LEAD)];
+        if (p2) aims.push(aims[0] + Math.PI / 2);
+        for (const base of aims) {
+          const perp = base + Math.PI / 2, count = 9, gap = randi(2, 6);
+          for (let row = 0; row < 2; row++) for (let k = 0; k < count; k++) {
+            if (Math.abs(k - gap) <= 1) continue;
+            const off = (k - (count - 1) / 2) * 38 + row * 19, ox = Math.cos(base) * -row * 30;
+            spawnEnemyProjectile(e.x + Math.cos(perp) * off + ox, e.y + Math.sin(perp) * off + Math.sin(base) * -row * 30, Math.cos(base) * HIVE_WALL_SPD, Math.sin(base) * HIVE_WALL_SPD, e.dmg * B_BULLET, YE, { arm: HIVE_WALL_TELE, r: 7 });
+          }
         }
       }
       d.eggCD = (d.eggCD ?? HIVE_EGG_CD) - dt;
@@ -2115,6 +2197,30 @@ const BOSSES = {
           spawnEnemyProjectile(e.x, e.y, Math.cos(a) * 95, Math.sin(a) * 95, e.dmg * B_BULLET, GR, { kind: 'egg', hatch: 1.5, hatchN: randi(6, 8), r: 11, life: 6 });
         }
       }
+      // C4: phase 2+ — RESIN: telegraphed puddles dropped along the player's
+      // predicted path; standing/circling through them slows hard, feeding
+      // you to drones and walls. Arms after a telegraph, then lingers.
+      if (e.phase >= 1) {
+        d.resinCD = (d.resinCD ?? HIVE_RESIN_CD) - dt;
+        if (d.resinCD <= 0) {
+          d.resinCD = HIVE_RESIN_CD;
+          d.resin = d.resin || [];
+          for (let k = 0; k < HIVE_RESIN_N; k++) {
+            const t = (k + 1) / HIVE_RESIN_N;
+            const rx = player.x + player.vx * HIVE_INT_LEAD * t * 2 + rand(-50, 50);
+            const ry = player.y + player.vy * HIVE_INT_LEAD * t * 2 + rand(-50, 50);
+            addTelegraph({ kind: 'zone', x: rx, y: ry, r: HIVE_RESIN_R, dur: HIVE_RESIN_TELE, color: GR });
+            d.resin.push({ x: rx, y: ry, t: HIVE_RESIN_T + HIVE_RESIN_TELE, arm: HIVE_RESIN_TELE });
+          }
+          e.flash = 1; sfx('zap');
+        }
+      }
+      if (d.resin) for (let i = d.resin.length - 1; i >= 0; i--) {
+        const R = d.resin[i]; R.t -= dt; if (R.arm > 0) R.arm -= dt;
+        if (R.t <= 0) { d.resin.splice(i, 1); continue; }
+        if (R.arm <= 0 && dist2(R.x, R.y, player.x, player.y) < HIVE_RESIN_R ** 2)
+          G.playerSlow = Math.min(G.playerSlow, HIVE_RESIN_SLOW);
+      }
       // phase 3 — pheromone frenzy: a pulse that whips every drone into a rush
       if (e.phase >= 2) {
         d.frzCD = (d.frzCD ?? HIVE_FRENZY_CD) - dt;
@@ -2126,6 +2232,14 @@ const BOSSES = {
       }
     },
     draw(e) {
+      // C4 resin puddles render under everything else
+      if (e.data.resin) for (const R of e.data.resin) {
+        if (R.arm > 0) continue;
+        const a2 = clamp(R.t / HIVE_RESIN_T, 0, 1);
+        ctx.fillStyle = rgba(GR, 0.10 * a2 + 0.04); ctx.strokeStyle = rgba(YE, 0.35 * a2); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(R.x, R.y, HIVE_RESIN_R * (0.92 + 0.08 * Math.sin(G.time * 2 + R.x)), 0, TAU); ctx.fill(); ctx.stroke();
+        glow(R.x, R.y, 18, GR, 0.4 * a2);
+      }
       const breathe = 1 + 0.06 * Math.sin(G.time * 3);
       glow(e.x, e.y, e.r * 1.4, GR, 0.5);
       ctx.fillStyle = rgba(GR, 0.10); ctx.strokeStyle = rgba(GR, 0.85); ctx.lineWidth = 3;
