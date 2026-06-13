@@ -1,6 +1,7 @@
 # NEON SWARM v2+ content pass — progress tracker
 
-STATUS: ACTIVE
+STATUS: COMPLETE — every item below shipped to main (live) as of v4.8,
+2026-06-12. Each shipped directly under the standing user authorization.
 Branch: main — push `neon main` after EVERY item (standing user authorization,
 2026-06-11: "pushing directly to main after each one without waiting for my
 confirmation"). Each push: VERSION +0.1 in js/game.js + CHANGELOG.md entry +
